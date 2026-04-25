@@ -31,6 +31,7 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+/ios/build/
 /coverage/
 
 # Symbolication related
@@ -46,3 +47,6 @@ app.*.map.json
 
 # Firebase Functions
 functions/node_modules/
+
+# Firebase Hosting cache output
+.firebase/hosting.*.cache
