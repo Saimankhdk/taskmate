@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "TaskMate": "taskmate-chat-test",
+    "default": "taskmate-chat-test"
+  },
+  "targets": {},
+  "etags": {}
+}

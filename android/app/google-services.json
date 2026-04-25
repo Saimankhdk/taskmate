@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "895619974573",
+    "project_id": "taskmate-chat-test",
+    "storage_bucket": "taskmate-chat-test.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:895619974573:android:e75adb73f277b4043e8d24",
+        "android_client_info": {
+          "package_name": "com.saiman.taskmate.capstone_project"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDOc8gu0Ftz25AXwYjQgrdYkuzrWwRUIaE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

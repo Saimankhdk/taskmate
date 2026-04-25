@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "895619974573",
+    "project_id": "taskmate-chat-test",
+    "storage_bucket": "taskmate-chat-test.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:895619974573:android:e75adb73f277b4043e8d24",
+        "android_client_info": {
+          "package_name": "com.saiman.taskmate.capstone_project"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "895619974573-r1ut1ktuqkvl4cdgivqco4hhqjev24co.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.saiman.taskmate.capstone_project",
+            "certificate_hash": "1e0900955b235afa580601fe247c4111da4d8f18"
+          }
+        },
+        {
+          "client_id": "895619974573-jk4j5vhlog4k6rjjmvogrtmdthm4s8ka.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDOc8gu0Ftz25AXwYjQgrdYkuzrWwRUIaE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "895619974573-jk4j5vhlog4k6rjjmvogrtmdthm4s8ka.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "895619974573-4mc11it5k7nf44abhkcmgrlueb8hsg72.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.saiman.taskmate.capstoneProject"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
