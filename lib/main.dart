@@ -2488,12 +2488,24 @@ class _LoginScreenState extends State<LoginScreen>
   final _signupName = TextEditingController();
   final _signupEmail = TextEditingController();
   final _signupPass = TextEditingController();
-  bool _obscureLogin = true, _obscureSignup = true, _loading = false;
+  final _signupConfirmPass = TextEditingController();
+  late final TabController _authTabs;
+  bool _obscureLogin = true,
+      _obscureSignup = true,
+      _obscureSignupConfirm = true;
+  bool _loading = false;
   bool _googleProviderReady = false;
+  String? _loginEmailError;
+  String? _loginPassError;
+  String? _signupNameError;
+  String? _signupEmailError;
+  String? _signupPassError;
+  String? _signupConfirmPassError;
 
   @override
   void initState() {
     super.initState();
+    _authTabs = TabController(length: 2, vsync: this);
     unawaited(_prepareGoogleProvider());
   }
 
@@ -2504,7 +2516,14 @@ class _LoginScreenState extends State<LoginScreen>
     _signupName.dispose();
     _signupEmail.dispose();
     _signupPass.dispose();
+    _signupConfirmPass.dispose();
+    _authTabs.dispose();
     super.dispose();
+  }
+
+  bool _isValidEmail(String email) {
+    final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+    return emailRegex.hasMatch(email);
   }
 
   void _toast(String message, {bool isError = true}) {
@@ -2787,12 +2806,29 @@ class _LoginScreenState extends State<LoginScreen>
   void _doLogin() async {
     final email = _loginEmail.text.trim();
     final pass = _loginPass.text;
-    if (email.isEmpty || pass.isEmpty) {
-      _toast('Email and password are required.');
+    String? emailError;
+    String? passError;
+    if (email.isEmpty) {
+      emailError = 'Email is required.';
+    } else if (!_isValidEmail(email)) {
+      emailError = 'Invalid email address.';
+    }
+    if (pass.isEmpty) {
+      passError = 'Password is required.';
+    }
+    if (emailError != null || passError != null) {
+      setState(() {
+        _loginEmailError = emailError;
+        _loginPassError = passError;
+      });
       return;
     }
 
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _loginEmailError = null;
+      _loginPassError = null;
+    });
     try {
       final cred = await fa.FirebaseAuth.instance.signInWithEmailAndPassword(
         email: email,
@@ -2818,15 +2854,28 @@ class _LoginScreenState extends State<LoginScreen>
     } on fa.FirebaseAuthException catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      final msg = switch (e.code) {
-        'invalid-email' => 'Invalid email address.',
-        'user-disabled' => 'This account has been disabled.',
-        'user-not-found' => 'No account found for this email.',
-        'wrong-password' => 'Incorrect password.',
-        'invalid-credential' => 'Incorrect email or password.',
-        _ => e.message ?? 'Login failed. Please try again.',
-      };
-      _toast(msg);
+      switch (e.code) {
+        case 'invalid-email':
+          setState(() => _loginEmailError = 'Invalid email address.');
+          return;
+        case 'user-not-found':
+          setState(() => _loginEmailError = 'Incorrect email.');
+          return;
+        case 'wrong-password':
+          setState(() => _loginPassError = 'Incorrect password.');
+          return;
+        case 'invalid-credential':
+          setState(() {
+            _loginEmailError = 'Incorrect email or password.';
+            _loginPassError = 'Incorrect email or password.';
+          });
+          return;
+        case 'user-disabled':
+          _toast('This account has been disabled.');
+          return;
+        default:
+          _toast(e.message ?? 'Login failed. Please try again.');
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -2838,16 +2887,49 @@ class _LoginScreenState extends State<LoginScreen>
     final name = _signupName.text.trim();
     final email = _signupEmail.text.trim();
     final pass = _signupPass.text;
-    if (name.isEmpty || email.isEmpty || pass.isEmpty) {
-      _toast('Name, email and password are required.');
-      return;
+    final confirmPass = _signupConfirmPass.text;
+    String? nameError;
+    String? emailError;
+    String? passError;
+    String? confirmPassError;
+    if (name.isEmpty) {
+      nameError = 'Name is required.';
     }
-    if (pass.length < 6) {
-      _toast('Password must be at least 6 characters.');
+    if (email.isEmpty) {
+      emailError = 'Email is required.';
+    } else if (!_isValidEmail(email)) {
+      emailError = 'Invalid email address.';
+    }
+    if (pass.isEmpty) {
+      passError = 'Password is required.';
+    } else if (pass.length < 6) {
+      passError = 'Password must be at least 6 characters.';
+    }
+    if (confirmPass.isEmpty) {
+      confirmPassError = 'Please confirm your password.';
+    } else if (confirmPass != pass) {
+      confirmPassError = 'Passwords do not match.';
+    }
+    if (nameError != null ||
+        emailError != null ||
+        passError != null ||
+        confirmPassError != null) {
+      setState(() {
+        _signupNameError = nameError;
+        _signupEmailError = emailError;
+        _signupPassError = passError;
+        _signupConfirmPassError = confirmPassError;
+      });
       return;
     }
 
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _signupNameError = null;
+      _signupEmailError = null;
+      _signupPassError = null;
+      _signupConfirmPassError = null;
+    });
     try {
       final cred = await fa.FirebaseAuth.instance
           .createUserWithEmailAndPassword(email: email, password: pass);
@@ -2858,16 +2940,6 @@ class _LoginScreenState extends State<LoginScreen>
       }
 
       await user.updateDisplayName(name);
-      await user.reload();
-      final refreshed = fa.FirebaseAuth.instance.currentUser;
-      if (refreshed != null) {
-        widget.appState.user.loginFromFirebaseUser(
-          refreshed,
-          fallbackDisplayName: name,
-        );
-      } else {
-        widget.appState.user.login(email, name, userId: user.uid);
-      }
 
       await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
         'uid': user.uid,
@@ -2881,21 +2953,43 @@ class _LoginScreenState extends State<LoginScreen>
         'introCompleted': false,
       }, SetOptions(merge: true));
 
+      await fa.FirebaseAuth.instance.signOut();
       if (!mounted) return;
-      setState(() => _loading = false);
-      _goHome(showIntro: true);
+      setState(() {
+        _loading = false;
+        _loginEmail.text = email;
+        _loginPass.text = pass;
+        _signupName.clear();
+        _signupEmail.clear();
+        _signupPass.clear();
+        _signupConfirmPass.clear();
+        _loginEmailError = null;
+        _loginPassError = null;
+      });
+      _authTabs.animateTo(0);
+      _toast('Account created. Please login to continue.', isError: false);
     } on fa.FirebaseAuthException catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      final msg = switch (e.code) {
-        'email-already-in-use' => 'An account already exists for this email.',
-        'invalid-email' => 'Invalid email address.',
-        'operation-not-allowed' =>
-          'Email/password sign-in is not enabled in Firebase.',
-        'weak-password' => 'Password is too weak.',
-        _ => e.message ?? 'Sign up failed. Please try again.',
-      };
-      _toast(msg);
+      switch (e.code) {
+        case 'email-already-in-use':
+          setState(
+            () =>
+                _signupEmailError = 'An account already exists for this email.',
+          );
+          return;
+        case 'invalid-email':
+          setState(() => _signupEmailError = 'Invalid email address.');
+          return;
+        case 'weak-password':
+          setState(() => _signupPassError = 'Password is too weak.');
+          return;
+        case 'operation-not-allowed':
+          _toast('Email/password sign-in is not enabled in Firebase.');
+          return;
+        default:
+          _toast(e.message ?? 'Sign up failed. Please try again.');
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -2915,451 +3009,272 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  void _openProviderSheet({required bool defaultSignup}) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1F2026),
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (_) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 44,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.white24,
-                  borderRadius: BorderRadius.circular(99),
-                ),
-              ),
-              const SizedBox(height: 18),
-              _providerTile(
-                icon: Icons.mail_outline_rounded,
-                label: defaultSignup
-                    ? 'Sign up with Email'
-                    : 'Log in with Email',
-                onTap: () {
-                  Navigator.pop(context);
-                  _openEmailAuthSheet(defaultSignup: defaultSignup);
-                },
-              ),
-              const SizedBox(height: 10),
-              _providerTile(
-                icon: Icons.g_mobiledata_rounded,
-                label: 'Continue with Google',
-                onTap: () {
-                  Navigator.pop(context);
-                  _doGoogleSignIn();
-                },
-              ),
-              const SizedBox(height: 10),
-              _providerTile(
-                icon: Icons.window_rounded,
-                label: 'Continue with Microsoft',
-                onTap: () => _toast('Microsoft sign-in is not configured yet.'),
-              ),
-              const SizedBox(height: 10),
-              _providerTile(
-                icon: Icons.apple_rounded,
-                label: 'Continue with Apple',
-                onTap: () => _toast('Apple sign-in is not configured yet.'),
-              ),
-              const SizedBox(height: 10),
-              _providerTile(
-                icon: Icons.tag_faces_rounded,
-                label: 'Continue with Slack',
-                onTap: () => _toast('Slack sign-in is not configured yet.'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _openEmailAuthSheet({required bool defaultSignup}) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final baseFill = isDark ? const Color(0xFF2A2C35) : AppTheme.gray100;
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: isDark ? const Color(0xFF1F2026) : Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (ctx) => DefaultTabController(
-        length: 2,
-        initialIndex: defaultSignup ? 1 : 0,
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: EdgeInsets.only(
-              left: 20,
-              right: 20,
-              top: 10,
-              bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                TabBar(
-                  dividerColor: Colors.transparent,
-                  indicatorColor: AppTheme.primary500,
-                  labelColor: isDark ? Colors.white : AppTheme.gray900,
-                  unselectedLabelColor: AppTheme.gray400,
-                  tabs: const [
-                    Tab(text: 'Log in'),
-                    Tab(text: 'Sign up'),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                SizedBox(
-                  height: 324,
-                  child: TabBarView(
-                    children: [
-                      Column(
-                        children: [
-                          _field(
-                            _loginEmail,
-                            'Email',
-                            Icons.email_outlined,
-                            keyboardType: TextInputType.emailAddress,
-                            filledColor: baseFill,
-                            dark: isDark,
-                          ),
-                          const SizedBox(height: 12),
-                          _field(
-                            _loginPass,
-                            'Password',
-                            Icons.lock_rounded,
-                            obscure: _obscureLogin,
-                            toggleObscure: () =>
-                                setState(() => _obscureLogin = !_obscureLogin),
-                            filledColor: baseFill,
-                            dark: isDark,
-                          ),
-                          const SizedBox(height: 8),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: TextButton(
-                              onPressed: _loading ? null : _openForgotPassword,
-                              child: const Text('Forgot password?'),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          _submitBtn('Log in', _doLogin),
-                        ],
-                      ),
-                      Column(
-                        children: [
-                          _field(
-                            _signupName,
-                            'Full name',
-                            Icons.person_outline_rounded,
-                            filledColor: baseFill,
-                            dark: isDark,
-                          ),
-                          const SizedBox(height: 12),
-                          _field(
-                            _signupEmail,
-                            'Email',
-                            Icons.email_outlined,
-                            keyboardType: TextInputType.emailAddress,
-                            filledColor: baseFill,
-                            dark: isDark,
-                          ),
-                          const SizedBox(height: 12),
-                          _field(
-                            _signupPass,
-                            'Password',
-                            Icons.lock_rounded,
-                            obscure: _obscureSignup,
-                            toggleObscure: () => setState(
-                              () => _obscureSignup = !_obscureSignup,
-                            ),
-                            filledColor: baseFill,
-                            dark: isDark,
-                          ),
-                          const SizedBox(height: 20),
-                          _submitBtn('Create account', _doSignup),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _providerTile({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return _TapSurface(
-      onTap: _loading ? null : onTap,
-      borderRadius: BorderRadius.circular(18),
-      child: Container(
-        height: 56,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A2C35),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: Colors.white10),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.white, size: 22),
-            const SizedBox(width: 14),
-            Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     const baseFill = AppTheme.gray50;
     return Scaffold(
       body: SafeArea(
-        child: DefaultTabController(
-          length: 2,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 28),
-            child: Column(
-              children: [
-                const SizedBox(height: 48),
-                Container(
-                  width: 72,
-                  height: 72,
-                  decoration: BoxDecoration(
-                    color: AppTheme.primary500,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Icon(
-                    Icons.task_alt_rounded,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            children: [
+              const SizedBox(height: 48),
+              Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  color: AppTheme.primary500,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Icon(
+                  Icons.task_alt_rounded,
+                  color: Colors.white,
+                  size: 44,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'TaskMate',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Stay organised. Stay ahead.',
+                style: TextStyle(color: AppTheme.gray600, fontSize: 14),
+              ),
+              const SizedBox(height: 40),
+              Container(
+                decoration: BoxDecoration(
+                  color: AppTheme.gray100,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                padding: const EdgeInsets.all(4),
+                child: TabBar(
+                  controller: _authTabs,
+                  indicator: BoxDecoration(
                     color: Colors.white,
-                    size: 44,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'TaskMate',
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Stay organised. Stay ahead.',
-                  style: TextStyle(color: AppTheme.gray600, fontSize: 14),
-                ),
-                const SizedBox(height: 40),
-                Container(
-                  decoration: BoxDecoration(
-                    color: AppTheme.gray100,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  padding: const EdgeInsets.all(4),
-                  child: TabBar(
-                    indicator: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.08),
-                          blurRadius: 8,
-                        ),
-                      ],
-                    ),
-                    indicatorSize: TabBarIndicatorSize.tab,
-                    dividerColor: Colors.transparent,
-                    labelColor: AppTheme.primary600,
-                    unselectedLabelColor: AppTheme.gray600,
-                    labelStyle: const TextStyle(fontWeight: FontWeight.w600),
-                    tabs: const [
-                      Tab(text: 'Login'),
-                      Tab(text: 'Sign Up'),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 28),
-                SizedBox(
-                  height: 350,
-                  child: TabBarView(
-                    children: [
-                      Column(
-                        children: [
-                          _field(
-                            _loginEmail,
-                            'Email',
-                            Icons.email_outlined,
-                            keyboardType: TextInputType.emailAddress,
-                            filledColor: baseFill,
-                            dark: false,
-                          ),
-                          const SizedBox(height: 14),
-                          _field(
-                            _loginPass,
-                            'Password',
-                            Icons.lock_rounded,
-                            obscure: _obscureLogin,
-                            toggleObscure: () =>
-                                setState(() => _obscureLogin = !_obscureLogin),
-                            filledColor: baseFill,
-                            dark: false,
-                          ),
-                          const SizedBox(height: 8),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: TextButton(
-                              onPressed: _loading ? null : _openForgotPassword,
-                              child: const Text('Forgot password?'),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          _submitBtn('Login', _doLogin),
-                          const SizedBox(height: 10),
-                          SizedBox(
-                            width: double.infinity,
-                            child: Wrap(
-                              alignment: WrapAlignment.center,
-                              children: [
-                                Text(
-                                  'By logging in, you agree to the ',
-                                  style: TextStyle(
-                                    color: AppTheme.gray600,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                InkWell(
-                                  onTap: _openUserNotice,
-                                  child: const Text(
-                                    'User Notice',
-                                    style: TextStyle(
-                                      color: AppTheme.primary600,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      decoration: TextDecoration.underline,
-                                    ),
-                                  ),
-                                ),
-                                Text(
-                                  ' and ',
-                                  style: TextStyle(
-                                    color: AppTheme.gray600,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                InkWell(
-                                  onTap: _openPrivacyPolicy,
-                                  child: const Text(
-                                    'Privacy Policy',
-                                    style: TextStyle(
-                                      color: AppTheme.primary600,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      decoration: TextDecoration.underline,
-                                    ),
-                                  ),
-                                ),
-                                Text(
-                                  '.',
-                                  style: TextStyle(
-                                    color: AppTheme.gray600,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      Column(
-                        children: [
-                          _field(
-                            _signupName,
-                            'Full Name',
-                            Icons.person,
-                            filledColor: baseFill,
-                            dark: false,
-                          ),
-                          const SizedBox(height: 14),
-                          _field(
-                            _signupEmail,
-                            'Email',
-                            Icons.email_outlined,
-                            keyboardType: TextInputType.emailAddress,
-                            filledColor: baseFill,
-                            dark: false,
-                          ),
-                          const SizedBox(height: 14),
-                          _field(
-                            _signupPass,
-                            'Password',
-                            Icons.lock_rounded,
-                            obscure: _obscureSignup,
-                            toggleObscure: () => setState(
-                              () => _obscureSignup = !_obscureSignup,
-                            ),
-                            filledColor: baseFill,
-                            dark: false,
-                          ),
-                          const SizedBox(height: 20),
-                          _submitBtn('Create Account', _doSignup),
-                        ],
+                    borderRadius: BorderRadius.circular(10),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.08),
+                        blurRadius: 8,
                       ),
                     ],
                   ),
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Expanded(child: Divider(color: AppTheme.gray200)),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Text(
-                        'or continue with',
-                        style: TextStyle(color: AppTheme.gray400, fontSize: 13),
-                      ),
-                    ),
-                    Expanded(child: Divider(color: AppTheme.gray200)),
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  dividerColor: Colors.transparent,
+                  labelColor: AppTheme.primary600,
+                  unselectedLabelColor: AppTheme.gray600,
+                  labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+                  tabs: const [
+                    Tab(text: 'Login'),
+                    Tab(text: 'Sign Up'),
                   ],
                 ),
-                const SizedBox(height: 16),
-                _googleButton(),
-                const SizedBox(height: 32),
-              ],
-            ),
+              ),
+              const SizedBox(height: 28),
+              SizedBox(
+                height: 430,
+                child: TabBarView(
+                  controller: _authTabs,
+                  children: [
+                    Column(
+                      children: [
+                        _field(
+                          _loginEmail,
+                          'Email',
+                          Icons.email_outlined,
+                          keyboardType: TextInputType.emailAddress,
+                          filledColor: baseFill,
+                          dark: false,
+                          errorText: _loginEmailError,
+                          onChanged: (_) {
+                            if (_loginEmailError != null) {
+                              setState(() => _loginEmailError = null);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 14),
+                        _field(
+                          _loginPass,
+                          'Password',
+                          Icons.lock_rounded,
+                          obscure: _obscureLogin,
+                          toggleObscure: () =>
+                              setState(() => _obscureLogin = !_obscureLogin),
+                          filledColor: baseFill,
+                          dark: false,
+                          errorText: _loginPassError,
+                          onChanged: (_) {
+                            if (_loginPassError != null) {
+                              setState(() => _loginPassError = null);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton(
+                            onPressed: _loading ? null : _openForgotPassword,
+                            child: const Text('Forgot password?'),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        _submitBtn('Login', _doLogin),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: double.infinity,
+                          child: Wrap(
+                            alignment: WrapAlignment.center,
+                            children: [
+                              Text(
+                                'By logging in, you agree to the ',
+                                style: TextStyle(
+                                  color: AppTheme.gray600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              InkWell(
+                                onTap: _openUserNotice,
+                                child: const Text(
+                                  'User Notice',
+                                  style: TextStyle(
+                                    color: AppTheme.primary600,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    decoration: TextDecoration.underline,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                ' and ',
+                                style: TextStyle(
+                                  color: AppTheme.gray600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              InkWell(
+                                onTap: _openPrivacyPolicy,
+                                child: const Text(
+                                  'Privacy Policy',
+                                  style: TextStyle(
+                                    color: AppTheme.primary600,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    decoration: TextDecoration.underline,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                '.',
+                                style: TextStyle(
+                                  color: AppTheme.gray600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        _googleButton(label: 'Continue with Google'),
+                      ],
+                    ),
+                    Column(
+                      children: [
+                        _field(
+                          _signupName,
+                          'Full Name',
+                          Icons.person,
+                          filledColor: baseFill,
+                          dark: false,
+                          errorText: _signupNameError,
+                          onChanged: (_) {
+                            if (_signupNameError != null) {
+                              setState(() => _signupNameError = null);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 14),
+                        _field(
+                          _signupEmail,
+                          'Email',
+                          Icons.email_outlined,
+                          keyboardType: TextInputType.emailAddress,
+                          filledColor: baseFill,
+                          dark: false,
+                          errorText: _signupEmailError,
+                          onChanged: (_) {
+                            if (_signupEmailError != null) {
+                              setState(() => _signupEmailError = null);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 14),
+                        _field(
+                          _signupPass,
+                          'Password',
+                          Icons.lock_rounded,
+                          obscure: _obscureSignup,
+                          toggleObscure: () =>
+                              setState(() => _obscureSignup = !_obscureSignup),
+                          filledColor: baseFill,
+                          dark: false,
+                          errorText: _signupPassError,
+                          onChanged: (_) {
+                            setState(() {
+                              if (_signupPassError != null) {
+                                _signupPassError = null;
+                              }
+                              if (_signupConfirmPassError != null) {
+                                _signupConfirmPassError =
+                                    _signupConfirmPass.text.isNotEmpty &&
+                                        _signupConfirmPass.text !=
+                                            _signupPass.text
+                                    ? 'Passwords do not match.'
+                                    : null;
+                              }
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 14),
+                        _field(
+                          _signupConfirmPass,
+                          'Confirm Password',
+                          Icons.lock_outline_rounded,
+                          obscure: _obscureSignupConfirm,
+                          toggleObscure: () => setState(
+                            () =>
+                                _obscureSignupConfirm = !_obscureSignupConfirm,
+                          ),
+                          filledColor: baseFill,
+                          dark: false,
+                          errorText: _signupConfirmPassError,
+                          onChanged: (_) {
+                            if (_signupConfirmPassError != null) {
+                              setState(() {
+                                _signupConfirmPassError =
+                                    _signupConfirmPass.text == _signupPass.text
+                                    ? null
+                                    : 'Passwords do not match.';
+                              });
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 20),
+                        _submitBtn('Create Account', _doSignup),
+                        const SizedBox(height: 12),
+                        _googleButton(label: 'Sign up with Google'),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 32),
+            ],
           ),
         ),
       ),
@@ -3375,14 +3290,20 @@ class _LoginScreenState extends State<LoginScreen>
     TextInputType? keyboardType,
     required Color filledColor,
     required bool dark,
+    String? errorText,
+    ValueChanged<String>? onChanged,
   }) {
+    final hasError = errorText != null;
     return TextField(
       controller: ctrl,
       obscureText: obscure,
       keyboardType: keyboardType,
       textCapitalization: TextCapitalization.none,
+      onChanged: onChanged,
       decoration: InputDecoration(
         labelText: label,
+        errorText: errorText,
+        errorStyle: const TextStyle(fontSize: 11),
         prefixIcon: Icon(
           icon,
           color: dark ? Colors.white70 : AppTheme.primary500,
@@ -3402,12 +3323,25 @@ class _LoginScreenState extends State<LoginScreen>
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
           borderSide: BorderSide(
-            color: dark ? Colors.white12 : AppTheme.gray200,
+            color: hasError
+                ? AppTheme.error
+                : (dark ? Colors.white12 : AppTheme.gray200),
           ),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: AppTheme.primary500, width: 2),
+          borderSide: BorderSide(
+            color: hasError ? AppTheme.error : AppTheme.primary500,
+            width: 2,
+          ),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppTheme.error),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppTheme.error, width: 2),
         ),
         filled: true,
         fillColor: filledColor,
@@ -3484,7 +3418,7 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  Widget _googleButton() {
+  Widget _googleButton({String label = 'Continue with Google'}) {
     final canUseGoogle = !_loading && (kIsWeb || _googleProviderReady);
     return SizedBox(
       width: double.infinity,
@@ -3513,7 +3447,7 @@ class _LoginScreenState extends State<LoginScreen>
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  'Continue with Google',
+                  label,
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: AppTheme.gray900,
@@ -3754,9 +3688,27 @@ class _IntroCarouselScreenState extends State<IntroCarouselScreen> {
 // ═══════════════════════════════════════════════════════════════════════════
 // WELCOME GROUP POPUP
 // ═══════════════════════════════════════════════════════════════════════════
-class WelcomeGroupDialog extends StatelessWidget {
+class WelcomeGroupDialog extends StatefulWidget {
   final AppState appState;
   const WelcomeGroupDialog({super.key, required this.appState});
+
+  @override
+  State<WelcomeGroupDialog> createState() => _WelcomeGroupDialogState();
+}
+
+class _WelcomeGroupDialogState extends State<WelcomeGroupDialog> {
+  int _tab = 0;
+
+  void _openWorkspaceFlow(BuildContext context, int index) {
+    Navigator.pop(context);
+    showDialog(
+      context: context,
+      builder: (_) => index == 0
+          ? CreateGroupDialog(appState: widget.appState)
+          : JoinGroupDialog(appState: widget.appState),
+      barrierDismissible: false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3768,81 +3720,152 @@ class WelcomeGroupDialog extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                color: AppTheme.primary50,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.group_work_rounded,
-                color: AppTheme.primary600,
-                size: 40,
-              ),
-            ),
-            const SizedBox(height: 20),
             const Text(
-              'Welcome to TaskMate!',
+              'Workspace',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Text(
-              'Create a workspace and invite your team, or join an existing one.',
+              'Create a new workspace or join with an invite code.',
               textAlign: TextAlign.center,
               style: TextStyle(color: AppTheme.gray600, fontSize: 14),
             ),
-            const SizedBox(height: 28),
-            FilledButton.icon(
-              onPressed: () {
-                Navigator.pop(context);
-                showDialog(
-                  context: context,
-                  builder: (_) => CreateGroupDialog(appState: appState),
-                  barrierDismissible: false,
-                );
-              },
-              icon: const Icon(Icons.add_circle_outline),
-              label: const Text('Create a Workspace'),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppTheme.primary500,
-                minimumSize: const Size(double.infinity, 50),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
+            const SizedBox(height: 18),
+            DefaultTabController(
+              length: 2,
+              child: Column(
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      color: AppTheme.gray100,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    padding: const EdgeInsets.all(4),
+                    child: TabBar(
+                      onTap: (index) => setState(() => _tab = index),
+                      indicator: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      indicatorSize: TabBarIndicatorSize.tab,
+                      dividerColor: Colors.transparent,
+                      labelColor: AppTheme.primary600,
+                      unselectedLabelColor: AppTheme.gray600,
+                      tabs: const [
+                        Tab(text: 'Create Workspace'),
+                        Tab(text: 'Join Workspace'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    height: 210,
+                    child: TabBarView(
+                      children: [
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: AppTheme.gray50,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: AppTheme.gray200),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Create Workspace',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Start a workspace, invite members, and keep chats, tasks, and files organized in one place.',
+                                style: TextStyle(
+                                  color: AppTheme.gray600,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const Spacer(),
+                              FilledButton.icon(
+                                onPressed: () => _openWorkspaceFlow(context, 0),
+                                icon: const Icon(Icons.add_circle_outline),
+                                label: const Text('Open Create Workspace'),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: AppTheme.primary500,
+                                  minimumSize: const Size(double.infinity, 48),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: AppTheme.gray50,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: AppTheme.gray200),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Join Workspace',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Join instantly using a workspace code or invite link from your team.',
+                                style: TextStyle(
+                                  color: AppTheme.gray600,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const Spacer(),
+                              OutlinedButton.icon(
+                                onPressed: () => _openWorkspaceFlow(context, 1),
+                                icon: const Icon(Icons.group_add_outlined),
+                                label: const Text('Open Join Workspace'),
+                                style: OutlinedButton.styleFrom(
+                                  minimumSize: const Size(double.infinity, 48),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  side: const BorderSide(
+                                    color: AppTheme.primary500,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    _tab == 0
+                        ? 'Slide to Join Workspace tab to switch.'
+                        : 'Slide to Create Workspace tab to switch.',
+                    style: TextStyle(color: AppTheme.gray400, fontSize: 12),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: () {
-                Navigator.pop(context);
-                showDialog(
-                  context: context,
-                  builder: (_) => JoinGroupDialog(appState: appState),
-                  barrierDismissible: false,
-                );
-              },
-              icon: const Icon(
-                Icons.group_add_outlined,
-                color: AppTheme.primary600,
-              ),
-              label: const Text(
-                'Join a Workspace',
-                style: TextStyle(color: AppTheme.primary600),
-              ),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size(double.infinity, 50),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                side: const BorderSide(color: AppTheme.primary500),
-              ),
-            ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             TextButton(
               onPressed: () => Navigator.pop(context),
               child: Text(
-                'Skip for now',
+                'Close',
                 style: TextStyle(color: AppTheme.gray400, fontSize: 13),
               ),
             ),
@@ -4156,10 +4179,22 @@ class CreateGroupDialog extends StatefulWidget {
 class _CreateGroupDialogState extends State<CreateGroupDialog> {
   final _nameCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
+  final _joinCodeCtrl = TextEditingController();
   final List<PhoneContact> _selectedContacts = [];
   final List<String> _manualNumbers = [];
   DateTime? _deadline;
+  int _activeWorkspaceTab = 0;
   bool _loading = false;
+  bool _joining = false;
+  String? _joinError;
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _descCtrl.dispose();
+    _joinCodeCtrl.dispose();
+    super.dispose();
+  }
 
   Future<void> _openContactPicker() async {
     final result = await showModalBottomSheet<Map<String, dynamic>>(
@@ -4290,6 +4325,34 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
     );
   }
 
+  void _joinByCode() async {
+    if (_joinCodeCtrl.text.trim().isEmpty) return;
+    setState(() {
+      _joining = true;
+      _joinError = null;
+    });
+    final success = await widget.appState.joinGroupByCode(
+      _joinCodeCtrl.text.trim(),
+    );
+    if (!mounted) return;
+    setState(() => _joining = false);
+    if (success) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Successfully joined workspace!'),
+          backgroundColor: AppTheme.success,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } else {
+      setState(
+        () =>
+            _joinError = 'Invalid workspace code. Please check and try again.',
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final totalSelected = _selectedContacts.length + _manualNumbers.length;
@@ -4302,368 +4365,601 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
           // Header
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Row(
+            child: Column(
               children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () => Navigator.pop(context),
+                Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.arrow_back),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                    const Expanded(
+                      child: Text(
+                        'Workspace',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    const SizedBox(width: 48),
+                  ],
                 ),
-                const Expanded(
-                  child: Text(
-                    'Create Workspace',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                    textAlign: TextAlign.center,
+                const SizedBox(height: 6),
+                Container(
+                  decoration: BoxDecoration(
+                    color: AppTheme.gray100,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  padding: const EdgeInsets.all(4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _TapSurface(
+                          onTap: () => setState(() => _activeWorkspaceTab = 0),
+                          borderRadius: BorderRadius.circular(9),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            decoration: BoxDecoration(
+                              color: _activeWorkspaceTab == 0
+                                  ? Colors.white
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(9),
+                            ),
+                            child: Text(
+                              'Create Workspace',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: _activeWorkspaceTab == 0
+                                    ? AppTheme.primary600
+                                    : AppTheme.gray600,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: _TapSurface(
+                          onTap: () => setState(() => _activeWorkspaceTab = 1),
+                          borderRadius: BorderRadius.circular(9),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            decoration: BoxDecoration(
+                              color: _activeWorkspaceTab == 1
+                                  ? Colors.white
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(9),
+                            ),
+                            child: Text(
+                              'Join Workspace',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: _activeWorkspaceTab == 1
+                                    ? AppTheme.primary600
+                                    : AppTheme.gray600,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 48),
               ],
             ),
           ),
           Flexible(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Group Name
-                  const _FieldLabel('Workspace Name'),
-                  TextField(
-                    controller: _nameCtrl,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    decoration: InputDecoration(
-                      hintText: 'e.g. INF305 Project Team',
-                      prefixIcon: const Icon(
-                        Icons.group,
-                        color: AppTheme.primary500,
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: AppTheme.gray200),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: AppTheme.gray200),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(
-                          color: AppTheme.primary500,
-                          width: 2,
-                        ),
-                      ),
-                      filled: true,
-                      fillColor: AppTheme.gray50,
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 14,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  // Description
-                  const _FieldLabel('Description (optional)'),
-                  TextField(
-                    controller: _descCtrl,
-                    maxLines: 2,
-                    decoration: InputDecoration(
-                      hintText: 'What is this workspace for?',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: AppTheme.gray200),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: AppTheme.gray200),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(
-                          color: AppTheme.primary500,
-                          width: 2,
-                        ),
-                      ),
-                      filled: true,
-                      fillColor: AppTheme.gray50,
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 14,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  // Deadline
-                  const _FieldLabel('Deadline'),
-                  _TapSurface(
-                    onTap: _pickDeadline,
-                    haptic: true,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 14,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _deadline != null
-                            ? AppTheme.primary500.withValues(alpha: 0.06)
-                            : AppTheme.gray50,
-                        border: Border.all(
-                          color: _deadline != null
-                              ? AppTheme.primary500.withValues(alpha: 0.3)
-                              : AppTheme.gray200,
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.event,
-                            color: _deadline != null
-                                ? AppTheme.primary500
-                                : AppTheme.gray600,
-                            size: 20,
+            child: _activeWorkspaceTab == 0
+                ? SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Group Name
+                        const _FieldLabel('Workspace Name'),
+                        TextField(
+                          controller: _nameCtrl,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500,
                           ),
-                          const SizedBox(width: 10),
-                          Text(
-                            _deadline == null
-                                ? 'Set deadline date & time'
-                                : _formatDeadline(_deadline!),
-                            style: TextStyle(
-                              color: _deadline != null
-                                  ? AppTheme.primary500
-                                  : AppTheme.gray600,
-                              fontSize: 14,
-                              fontWeight: _deadline != null
-                                  ? FontWeight.w600
-                                  : FontWeight.normal,
-                            ),
-                          ),
-                          const Spacer(),
-                          if (_deadline != null)
-                            IconButton(
-                              onPressed: () {
-                                _hapticLight();
-                                setState(() => _deadline = null);
-                              },
-                              icon: const Icon(
-                                Icons.close,
-                                size: 16,
-                                color: AppTheme.gray600,
-                              ),
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(
-                                minWidth: 32,
-                                minHeight: 32,
-                              ),
-                              splashRadius: 18,
-                              tooltip: 'Clear deadline',
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  // Members
-                  Row(
-                    children: [
-                      const _FieldLabel('Members'),
-                      const Spacer(),
-                      if (totalSelected > 0)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppTheme.primary500,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            '$totalSelected selected',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  _TapSurface(
-                    onTap: _openContactPicker,
-                    haptic: true,
-                    child: Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: AppTheme.gray50,
-                        border: Border.all(color: AppTheme.gray200),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 40,
-                            height: 40,
-                            decoration: BoxDecoration(
-                              color: AppTheme.primary500.withValues(alpha: 0.1),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.contacts,
+                          decoration: InputDecoration(
+                            hintText: 'e.g. INF305 Project Team',
+                            prefixIcon: const Icon(
+                              Icons.group,
                               color: AppTheme.primary500,
-                              size: 22,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: AppTheme.gray200),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: AppTheme.gray200),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: AppTheme.primary500,
+                                width: 2,
+                              ),
+                            ),
+                            filled: true,
+                            fillColor: AppTheme.gray50,
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 14,
                             ),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                        ),
+                        const SizedBox(height: 14),
+                        // Description
+                        const _FieldLabel('Description (optional)'),
+                        TextField(
+                          controller: _descCtrl,
+                          maxLines: 2,
+                          decoration: InputDecoration(
+                            hintText: 'What is this workspace for?',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: AppTheme.gray200),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: AppTheme.gray200),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: AppTheme.primary500,
+                                width: 2,
+                              ),
+                            ),
+                            filled: true,
+                            fillColor: AppTheme.gray50,
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 14,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        // Deadline
+                        const _FieldLabel('Deadline'),
+                        _TapSurface(
+                          onTap: _pickDeadline,
+                          haptic: true,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 14,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _deadline != null
+                                  ? AppTheme.primary500.withValues(alpha: 0.06)
+                                  : AppTheme.gray50,
+                              border: Border.all(
+                                color: _deadline != null
+                                    ? AppTheme.primary500.withValues(alpha: 0.3)
+                                    : AppTheme.gray200,
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
                               children: [
-                                const Text(
-                                  'Choose from Contacts',
+                                Icon(
+                                  Icons.event,
+                                  color: _deadline != null
+                                      ? AppTheme.primary500
+                                      : AppTheme.gray600,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  _deadline == null
+                                      ? 'Set deadline date & time'
+                                      : _formatDeadline(_deadline!),
                                   style: TextStyle(
-                                    fontWeight: FontWeight.w600,
+                                    color: _deadline != null
+                                        ? AppTheme.primary500
+                                        : AppTheme.gray600,
                                     fontSize: 14,
+                                    fontWeight: _deadline != null
+                                        ? FontWeight.w600
+                                        : FontWeight.normal,
                                   ),
                                 ),
-                                Text(
-                                  totalSelected == 0
-                                      ? 'Tap to add members'
-                                      : '$totalSelected member${totalSelected != 1 ? 's' : ''} will receive an invite',
-                                  style: TextStyle(
-                                    color: AppTheme.gray600,
-                                    fontSize: 12,
+                                const Spacer(),
+                                if (_deadline != null)
+                                  IconButton(
+                                    onPressed: () {
+                                      _hapticLight();
+                                      setState(() => _deadline = null);
+                                    },
+                                    icon: const Icon(
+                                      Icons.close,
+                                      size: 16,
+                                      color: AppTheme.gray600,
+                                    ),
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 32,
+                                      minHeight: 32,
+                                    ),
+                                    splashRadius: 18,
+                                    tooltip: 'Clear deadline',
                                   ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        // Members
+                        Row(
+                          children: [
+                            const _FieldLabel('Members'),
+                            const Spacer(),
+                            if (totalSelected > 0)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.primary500,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  '$totalSelected selected',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        _TapSurface(
+                          onTap: _openContactPicker,
+                          haptic: true,
+                          child: Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: AppTheme.gray50,
+                              border: Border.all(color: AppTheme.gray200),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primary500.withValues(
+                                      alpha: 0.1,
+                                    ),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.contacts,
+                                    color: AppTheme.primary500,
+                                    size: 22,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'Choose from Contacts',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                      Text(
+                                        totalSelected == 0
+                                            ? 'Tap to add members'
+                                            : '$totalSelected member${totalSelected != 1 ? 's' : ''} will receive an invite',
+                                        style: TextStyle(
+                                          color: AppTheme.gray600,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const Icon(
+                                  Icons.chevron_right,
+                                  color: AppTheme.gray600,
                                 ),
                               ],
                             ),
                           ),
-                          const Icon(
-                            Icons.chevron_right,
-                            color: AppTheme.gray600,
+                        ),
+                        // Selected members chips
+                        if (totalSelected > 0) ...[
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 6,
+                            children: [
+                              ..._selectedContacts.map((c) {
+                                return Chip(
+                                  label: Text(
+                                    c.name.split(' ')[0],
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                  deleteIcon: const Icon(Icons.close, size: 14),
+                                  onDeleted: () => setState(() {
+                                    _selectedContacts.removeWhere(
+                                      (entry) =>
+                                          entry.name == c.name &&
+                                          entry.phone == c.phone,
+                                    );
+                                  }),
+                                  backgroundColor: AppTheme.primary500
+                                      .withValues(alpha: 0.08),
+                                  side: BorderSide(
+                                    color: AppTheme.primary500.withValues(
+                                      alpha: 0.2,
+                                    ),
+                                  ),
+                                );
+                              }),
+                              ..._manualNumbers.map(
+                                (phone) => Chip(
+                                  label: Text(
+                                    phone,
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                  deleteIcon: const Icon(Icons.close, size: 14),
+                                  onDeleted: () => setState(
+                                    () => _manualNumbers.remove(phone),
+                                  ),
+                                  backgroundColor: AppTheme.success.withValues(
+                                    alpha: 0.08,
+                                  ),
+                                  side: BorderSide(
+                                    color: AppTheme.success.withValues(
+                                      alpha: 0.2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
-                      ),
-                    ),
-                  ),
-                  // Selected members chips
-                  if (totalSelected > 0) ...[
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      children: [
-                        ..._selectedContacts.map((c) {
-                          return Chip(
-                            label: Text(
-                              c.name.split(' ')[0],
-                              style: const TextStyle(fontSize: 12),
+                        const SizedBox(height: 8),
+                        // Invite notice
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: AppTheme.info.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: AppTheme.info.withValues(alpha: 0.15),
                             ),
-                            deleteIcon: const Icon(Icons.close, size: 14),
-                            onDeleted: () => setState(() {
-                              _selectedContacts.removeWhere(
-                                (entry) =>
-                                    entry.name == c.name &&
-                                    entry.phone == c.phone,
-                              );
-                            }),
-                            backgroundColor: AppTheme.primary500.withValues(
-                              alpha: 0.08,
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(
+                                Icons.campaign_outlined,
+                                color: AppTheme.info,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'TaskMate users get in-app invites, emails are sent to email addresses, and phone numbers can be invited from your SMS app.',
+                                  style: TextStyle(
+                                    color: AppTheme.info,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton(
+                            onPressed: _loading ? null : _createGroup,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: AppTheme.primary500,
+                              minimumSize: const Size(double.infinity, 52),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
                             ),
-                            side: BorderSide(
-                              color: AppTheme.primary500.withValues(alpha: 0.2),
-                            ),
-                          );
-                        }),
-                        ..._manualNumbers.map(
-                          (phone) => Chip(
-                            label: Text(
-                              phone,
-                              style: const TextStyle(fontSize: 11),
-                            ),
-                            deleteIcon: const Icon(Icons.close, size: 14),
-                            onDeleted: () =>
-                                setState(() => _manualNumbers.remove(phone)),
-                            backgroundColor: AppTheme.success.withValues(
-                              alpha: 0.08,
-                            ),
-                            side: BorderSide(
-                              color: AppTheme.success.withValues(alpha: 0.2),
-                            ),
+                            child: _loading
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2.5,
+                                    ),
+                                  )
+                                : const Text(
+                                    'Create Workspace & Send Invites',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
                           ),
                         ),
                       ],
                     ),
-                  ],
-                  const SizedBox(height: 8),
-                  // Invite notice
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppTheme.info.withValues(alpha: 0.06),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: AppTheme.info.withValues(alpha: 0.15),
-                      ),
-                    ),
-                    child: Row(
+                  )
+                : SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Icon(
-                          Icons.campaign_outlined,
-                          color: AppTheme.info,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'TaskMate users get in-app invites, emails are sent to email addresses, and phone numbers can be invited from your SMS app.',
-                            style: TextStyle(
-                              color: AppTheme.info,
-                              fontSize: 12,
+                        const SizedBox(height: 6),
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: AppTheme.info.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: AppTheme.info.withValues(alpha: 0.2),
                             ),
                           ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(
+                                    Icons.link,
+                                    color: AppTheme.info,
+                                    size: 20,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Join via Invite Link',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: AppTheme.info,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Open your inbox/messages to find your invite link, or use the workspace code below.',
+                                style: TextStyle(
+                                  color: AppTheme.gray600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              OutlinedButton.icon(
+                                onPressed: () => launchUrl(Uri(scheme: 'sms')),
+                                icon: const Icon(
+                                  Icons.sms_outlined,
+                                  color: AppTheme.info,
+                                  size: 20,
+                                ),
+                                label: const Text(
+                                  'Open SMS App',
+                                  style: TextStyle(color: AppTheme.info),
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  side: const BorderSide(color: AppTheme.info),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        Row(
+                          children: [
+                            Expanded(child: Divider(color: AppTheme.gray200)),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
+                              child: Text(
+                                'or enter code',
+                                style: TextStyle(
+                                  color: AppTheme.gray400,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                            Expanded(child: Divider(color: AppTheme.gray200)),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        const Text(
+                          'Workspace Code',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: AppTheme.gray600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _joinCodeCtrl,
+                          textCapitalization: TextCapitalization.characters,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 6,
+                          ),
+                          maxLength: 6,
+                          decoration: InputDecoration(
+                            counterText: '',
+                            hintText: 'ABC123',
+                            hintStyle: TextStyle(
+                              color: AppTheme.gray200,
+                              letterSpacing: 6,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: const BorderSide(
+                                color: AppTheme.primary500,
+                                width: 2,
+                              ),
+                            ),
+                            errorText: _joinError,
+                            filled: true,
+                            fillColor: AppTheme.gray50,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          onPressed: _joining ? null : _joinByCode,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppTheme.primary500,
+                            minimumSize: const Size(double.infinity, 52),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: _joining
+                              ? const SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2.5,
+                                  ),
+                                )
+                              : const Text(
+                                  'Join Workspace',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: _loading ? null : _createGroup,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppTheme.primary500,
-                        minimumSize: const Size(double.infinity, 52),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                      child: _loading
-                          ? const SizedBox(
-                              width: 22,
-                              height: 22,
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 2.5,
-                              ),
-                            )
-                          : const Text(
-                              'Create Workspace & Send Invites',
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ),
         ],
       ),
@@ -5213,7 +5509,9 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
           ? picked.name.split('.').last.toLowerCase()
           : 'jpg';
       final contentType =
-          lookupMimeType(picked.name, headerBytes: bytes) ?? 'image/jpeg';
+          lookupMimeType('', headerBytes: bytes) ??
+          lookupMimeType(picked.name, headerBytes: bytes) ??
+          'image/jpeg';
       final path =
           'uploads/${currentUser.uid}/group_avatars/${group.id}_${DateTime.now().millisecondsSinceEpoch}.$ext';
       final ref = FirebaseStorage.instance.ref(path);
@@ -6645,7 +6943,6 @@ class MainNav extends StatefulWidget {
 
 class _MainNavState extends State<MainNav> {
   int _idx = 0;
-  bool _shownWelcome = false;
   String _boundRealtimeUid = '';
 
   @override
@@ -6708,14 +7005,6 @@ class _MainNavState extends State<MainNav> {
       );
       await _markIntroCompleted();
     }
-    if (!mounted) return;
-    if (_shownWelcome || widget.appState.groups.isNotEmpty) return;
-    _shownWelcome = true;
-    await showDialog(
-      context: context,
-      builder: (_) => WelcomeGroupDialog(appState: widget.appState),
-      barrierDismissible: false,
-    );
   }
 
   @override
@@ -6903,29 +7192,6 @@ class _ActivityScreenState extends State<ActivityScreen> {
       default:
         return true;
     }
-  }
-
-  String _categoryFor(ActivityEntry e) {
-    final text = '${e.title} ${e.subtitle}'.toLowerCase();
-    if (text.contains('file') || text.contains('upload')) return 'Files';
-    if (text.contains('group') ||
-        text.contains('workspace') ||
-        text.contains('member')) {
-      return 'Workspaces';
-    }
-    if (text.contains('task')) return 'Tasks';
-    if (text.contains('event') || text.contains('calendar')) return 'Events';
-    return 'Messages';
-  }
-
-  Map<String, List<ActivityEntry>> _groupByCategory(
-    List<ActivityEntry> entries,
-  ) {
-    final out = <String, List<ActivityEntry>>{};
-    for (final e in entries) {
-      out.putIfAbsent(_categoryFor(e), () => []).add(e);
-    }
-    return out;
   }
 
   @override
@@ -8429,7 +8695,9 @@ class _AccountScreenState extends State<AccountScreen> {
           ? file.name.split('.').last.toLowerCase()
           : 'jpg';
       final contentType =
-          lookupMimeType(file.name, headerBytes: file.bytes!) ?? 'image/jpeg';
+          lookupMimeType('', headerBytes: file.bytes!) ??
+          lookupMimeType(file.name, headerBytes: file.bytes!) ??
+          'image/jpeg';
       final storagePath =
           'uploads/${currentUser.uid}/avatars/${DateTime.now().millisecondsSinceEpoch}.$ext';
       final ref = FirebaseStorage.instance.ref(storagePath);
@@ -8876,78 +9144,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
     super.dispose();
   }
 
-  void _openQuickCreate() {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: AppTheme.gray200,
-                  borderRadius: BorderRadius.circular(99),
-                ),
-              ),
-              const SizedBox(height: 14),
-              ListTile(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                tileColor: AppTheme.gray50,
-                leading: const Icon(Icons.group_add_rounded),
-                title: const Text('Create workspace'),
-                subtitle: const Text('Create a new workspace'),
-                onTap: () {
-                  Navigator.pop(context);
-                  showDialog(
-                    context: context,
-                    builder: (_) =>
-                        CreateGroupDialog(appState: widget.appState),
-                    barrierDismissible: false,
-                  );
-                },
-              ),
-              const SizedBox(height: 10),
-              ListTile(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                tileColor: AppTheme.gray50,
-                leading: const Icon(Icons.draw_rounded),
-                title: const Text('Create whiteboard'),
-                subtitle: const Text(
-                  'Editable board for one selected workspace',
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  showModalBottomSheet(
-                    context: context,
-                    isScrollControlled: true,
-                    shape: const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.vertical(
-                        top: Radius.circular(24),
-                      ),
-                    ),
-                    builder: (_) =>
-                        CreateWhiteboardSheet(appState: widget.appState),
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -8985,34 +9181,35 @@ class _GroupsScreenState extends State<GroupsScreen> {
               style: TextStyle(fontWeight: FontWeight.w800, fontSize: 24),
             ),
             actions: [
-              IconButton(
-                tooltip: 'Create workspace',
-                icon: const Icon(Icons.group_add_outlined),
-                onPressed: () {
-                  showDialog(
-                    context: context,
-                    builder: (_) =>
-                        CreateGroupDialog(appState: widget.appState),
-                    barrierDismissible: false,
-                  );
-                },
-              ),
-              IconButton(
-                tooltip: 'Create whiteboard',
-                icon: const Icon(Icons.add_rounded),
-                onPressed: () {
-                  showModalBottomSheet(
-                    context: context,
-                    isScrollControlled: true,
-                    shape: const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.vertical(
-                        top: Radius.circular(24),
-                      ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.black,
+                    side: const BorderSide(color: Colors.black, width: 1),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(9),
                     ),
-                    builder: (_) =>
-                        CreateWhiteboardSheet(appState: widget.appState),
-                  );
-                },
+                    textStyle: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                    minimumSize: const Size(0, 34),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 2,
+                    ),
+                  ),
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (_) =>
+                          CreateGroupDialog(appState: widget.appState),
+                      barrierDismissible: false,
+                    );
+                  },
+                  child: const Text('Workspace'),
+                ),
               ),
               IconButton(
                 icon: const Icon(Icons.settings_outlined),
@@ -9194,13 +9391,42 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   ),
                 ),
               const SizedBox(height: 8),
-              const Text(
-                'WHITEBOARDS',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: AppTheme.gray600,
-                ),
+              Row(
+                children: [
+                  const Text(
+                    'WHITEBOARDS',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.gray600,
+                    ),
+                  ),
+                  const Spacer(),
+                  OutlinedButton.icon(
+                    onPressed: myUid.isEmpty
+                        ? null
+                        : () {
+                            showModalBottomSheet(
+                              context: context,
+                              isScrollControlled: true,
+                              shape: const RoundedRectangleBorder(
+                                borderRadius: BorderRadius.vertical(
+                                  top: Radius.circular(24),
+                                ),
+                              ),
+                              builder: (_) => CreateWhiteboardSheet(
+                                appState: widget.appState,
+                              ),
+                            );
+                          },
+                    icon: const Icon(Icons.add_rounded, size: 16),
+                    label: const Text('Create'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 34),
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 10),
               if (myUid.isEmpty)
@@ -9247,7 +9473,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: const Text(
-                          'No whiteboards yet. Tap + and choose Create whiteboard.',
+                          'No whiteboards yet. Tap Create to add one.',
                         ),
                       );
                     }
@@ -9262,6 +9488,10 @@ class _GroupsScreenState extends State<GroupsScreen> {
                             (m['content'] as String?)?.trim().isNotEmpty ??
                                 false
                             ? (m['content'] as String).trim()
+                            : ((m['drawingData'] as List?)?.isNotEmpty ?? false)
+                            ? 'Drawing board'
+                            : ((m['stickyNotesData'] as List?)?.isNotEmpty ?? false)
+                            ? 'Sticky notes board'
                             : 'Blank whiteboard';
                         return Container(
                           margin: const EdgeInsets.only(bottom: 10),
@@ -9377,6 +9607,8 @@ class _CreateWhiteboardSheetState extends State<CreateWhiteboardSheet> {
       await FirebaseFirestore.instance.collection('whiteboards').add({
         'title': title,
         'content': '',
+        'drawingData': <Map<String, dynamic>>[],
+        'stickyNotesData': <Map<String, dynamic>>[],
         'groupId': group.id,
         'groupName': group.name,
         'ownerUid': widget.appState.user.uid,
@@ -9487,25 +9719,348 @@ class WhiteboardEditorScreen extends StatefulWidget {
 }
 
 class _WhiteboardEditorScreenState extends State<WhiteboardEditorScreen> {
-  final _ctrl = TextEditingController();
+  static const Size _canvasSize = Size(2200, 1400);
+  final TransformationController _transformController =
+      TransformationController();
+  final TextEditingController _notesCtrl = TextEditingController();
+  final List<_WhiteboardStroke> _strokes = [];
+  final List<_WhiteboardStickyNote> _stickyNotes = [];
+  _WhiteboardStroke? _activeStroke;
   Timer? _debounce;
+  DateTime _lastPresencePush = DateTime.fromMillisecondsSinceEpoch(0);
+  Color _selectedColor = const Color(0xFF111111);
+  double _selectedWidth = 3.0;
+  _WhiteboardTool _tool = _WhiteboardTool.draw;
   bool _ready = false;
+  String _lastSavedSignature = '';
+  String _latestLocalSignature = '';
+  bool _hasPendingLocalChanges = false;
+
+  bool get _isDrawEnabled =>
+      _tool == _WhiteboardTool.draw || _tool == _WhiteboardTool.eraser;
+
+  String get _myUid => fa.FirebaseAuth.instance.currentUser?.uid ?? '';
+
+  String get _myLabel {
+    final user = fa.FirebaseAuth.instance.currentUser;
+    if (user == null) return 'Guest';
+    if ((user.displayName ?? '').trim().isNotEmpty) return user.displayName!.trim();
+    if ((user.email ?? '').trim().isNotEmpty) return user.email!;
+    return user.uid;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_syncPresence(_canvasSize.center(Offset.zero)));
+  }
 
   @override
   void dispose() {
     _debounce?.cancel();
-    _ctrl.dispose();
+    unawaited(_clearPresence());
+    _notesCtrl.dispose();
+    _transformController.dispose();
     super.dispose();
   }
 
-  Future<void> _saveContent(String value) async {
-    await FirebaseFirestore.instance
-        .collection('whiteboards')
-        .doc(widget.boardId)
-        .set({
-          'content': value,
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+  String _boardSignature({
+    required String notes,
+    required List<_WhiteboardStroke> strokes,
+    required List<_WhiteboardStickyNote> stickyNotes,
+  }) {
+    return jsonEncode({
+      'notes': notes,
+      'strokes': strokes.map((e) => e.toMap()).toList(),
+      'stickyNotes': stickyNotes.map((e) => e.toMap()).toList(),
+    });
+  }
+
+  List<_WhiteboardStroke> _decodeStrokes(dynamic raw) {
+    if (raw is! List) return [];
+    final parsed = <_WhiteboardStroke>[];
+    for (final item in raw) {
+      final stroke = _WhiteboardStroke.fromRaw(item);
+      if (stroke != null) parsed.add(stroke);
+    }
+    return parsed;
+  }
+
+  List<_WhiteboardStickyNote> _decodeStickyNotes(dynamic raw) {
+    if (raw is! List) return [];
+    final parsed = <_WhiteboardStickyNote>[];
+    for (final item in raw) {
+      final note = _WhiteboardStickyNote.fromRaw(item);
+      if (note != null) parsed.add(note);
+    }
+    return parsed;
+  }
+
+  int _presenceColorForUid(String uid) {
+    const palette = [
+      0xFF2563EB,
+      0xFF7C3AED,
+      0xFFDC2626,
+      0xFF059669,
+      0xFFEA580C,
+      0xFF0891B2,
+    ];
+    if (uid.isEmpty) return palette.first;
+    final hash = uid.codeUnits.fold<int>(0, (prev, c) => prev + c);
+    return palette[hash % palette.length];
+  }
+
+  void _markLocalDirty() {
+    _latestLocalSignature = _boardSignature(
+      notes: _notesCtrl.text,
+      strokes: _strokes,
+      stickyNotes: _stickyNotes,
+    );
+    _hasPendingLocalChanges = true;
+  }
+
+  void _queueSave() {
+    _markLocalDirty();
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 450), () {
+      unawaited(_saveBoard());
+    });
+  }
+
+  Future<void> _saveBoard() async {
+    final notes = _notesCtrl.text;
+    final drawingData = _strokes.map((e) => e.toMap()).toList(growable: false);
+    final stickyData = _stickyNotes.map((e) => e.toMap()).toList(growable: false);
+    final toSaveSignature = _boardSignature(
+      notes: notes,
+      strokes: _strokes,
+      stickyNotes: _stickyNotes,
+    );
+    try {
+      await FirebaseFirestore.instance
+          .collection('whiteboards')
+          .doc(widget.boardId)
+          .set({
+            'content': notes,
+            'drawingData': drawingData,
+            'stickyNotesData': stickyData,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+      _lastSavedSignature = toSaveSignature;
+      if (_latestLocalSignature == toSaveSignature) {
+        _hasPendingLocalChanges = false;
+      }
+    } on FirebaseException {
+      // Keep pending state; next local action retries save.
+    } catch (_) {}
+  }
+
+  Future<void> _syncPresence(Offset raw) async {
+    final uid = _myUid;
+    if (uid.isEmpty) return;
+    final now = DateTime.now();
+    if (now.difference(_lastPresencePush).inMilliseconds < 180) return;
+    _lastPresencePush = now;
+    final p = Offset(
+      raw.dx.clamp(0.0, _canvasSize.width),
+      raw.dy.clamp(0.0, _canvasSize.height),
+    );
+    try {
+      await FirebaseFirestore.instance
+          .collection('whiteboards')
+          .doc(widget.boardId)
+          .collection('presence')
+          .doc(uid)
+          .set({
+            'uid': uid,
+            'label': _myLabel,
+            'color': _presenceColorForUid(uid),
+            'x': p.dx,
+            'y': p.dy,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+    } on FirebaseException {
+      // Optional presence channel; ignore if blocked by rules.
+    } catch (_) {}
+  }
+
+  Future<void> _clearPresence() async {
+    final uid = _myUid;
+    if (uid.isEmpty) return;
+    try {
+      await FirebaseFirestore.instance
+          .collection('whiteboards')
+          .doc(widget.boardId)
+          .collection('presence')
+          .doc(uid)
+          .delete();
+    } on FirebaseException {
+      // Presence is best effort.
+    } catch (_) {}
+  }
+
+  void _startStroke(Offset p) {
+    if (!_isDrawEnabled) return;
+    unawaited(_syncPresence(p));
+    final clamped = Offset(
+      p.dx.clamp(0.0, _canvasSize.width),
+      p.dy.clamp(0.0, _canvasSize.height),
+    );
+    setState(() {
+      _activeStroke = _WhiteboardStroke(
+        colorValue: _tool == _WhiteboardTool.eraser
+            ? Colors.transparent.toARGB32()
+            : _selectedColor.toARGB32(),
+        erase: _tool == _WhiteboardTool.eraser,
+        width: _selectedWidth,
+        points: [clamped],
+      );
+    });
+  }
+
+  void _updateStroke(Offset p) {
+    if (!_isDrawEnabled || _activeStroke == null) return;
+    unawaited(_syncPresence(p));
+    final clamped = Offset(
+      p.dx.clamp(0.0, _canvasSize.width),
+      p.dy.clamp(0.0, _canvasSize.height),
+    );
+    setState(() {
+      _activeStroke!.points.add(clamped);
+    });
+  }
+
+  void _endStroke() {
+    if (_activeStroke == null) return;
+    setState(() {
+      if (_activeStroke!.points.length > 1) {
+        _strokes.add(_activeStroke!);
+        _queueSave();
+      }
+      _activeStroke = null;
+    });
+  }
+
+  void _undoStroke() {
+    if (_strokes.isEmpty) return;
+    setState(() {
+      _strokes.removeLast();
+      _queueSave();
+    });
+  }
+
+  void _clearBoard() {
+    if (_strokes.isEmpty && _stickyNotes.isEmpty) return;
+    setState(() {
+      _strokes.clear();
+      _stickyNotes.clear();
+      _queueSave();
+    });
+  }
+
+  Future<void> _addStickyNote() async {
+    var draftText = '';
+    final text = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add sticky note'),
+        content: TextField(
+          maxLines: 4,
+          autofocus: true,
+          onChanged: (value) => draftText = value,
+          decoration: const InputDecoration(
+            hintText: 'Type your note text...',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, draftText.trim()),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    if (text == null) return;
+    final id = 'n_${DateTime.now().microsecondsSinceEpoch}';
+    setState(() {
+      _stickyNotes.add(
+        _WhiteboardStickyNote(
+          id: id,
+          text: text.isEmpty ? 'Note' : text,
+          x: _canvasSize.width * 0.45,
+          y: _canvasSize.height * 0.4,
+          colorValue: const Color(0xFFFDE68A).toARGB32(),
+        ),
+      );
+      _queueSave();
+    });
+  }
+
+  Future<void> _editStickyNote(_WhiteboardStickyNote note) async {
+    final ctrl = TextEditingController(text: note.text);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit sticky note'),
+        content: TextField(
+          controller: ctrl,
+          maxLines: 4,
+          decoration: const InputDecoration(
+            hintText: 'Write your note...',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, '__delete__'),
+            child: const Text('Delete'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (result == null) return;
+    if (result == '__delete__') {
+      setState(() {
+        _stickyNotes.removeWhere((n) => n.id == note.id);
+        _queueSave();
+      });
+      return;
+    }
+    setState(() {
+      final idx = _stickyNotes.indexWhere((n) => n.id == note.id);
+      if (idx >= 0) {
+        _stickyNotes[idx] = _stickyNotes[idx].copyWith(
+          text: result.isEmpty ? 'Note' : result,
+        );
+        _queueSave();
+      }
+    });
+  }
+
+  void _moveStickyNote(_WhiteboardStickyNote note, Offset delta) {
+    final idx = _stickyNotes.indexWhere((n) => n.id == note.id);
+    if (idx < 0) return;
+    setState(() {
+      _stickyNotes[idx] = _stickyNotes[idx].copyWith(
+        x: (_stickyNotes[idx].x + delta.dx).clamp(0.0, _canvasSize.width - 170),
+        y: (_stickyNotes[idx].y + delta.dy).clamp(0.0, _canvasSize.height - 130),
+      );
+    });
+    _queueSave();
   }
 
   Future<void> _deleteBoard() async {
@@ -9550,12 +10105,43 @@ class _WhiteboardEditorScreenState extends State<WhiteboardEditorScreen> {
         final data = (snapshot.data?.data() as Map<String, dynamic>?) ?? {};
         final title = (data['title'] as String?) ?? widget.initialTitle;
         final content = (data['content'] as String?) ?? '';
+        final remoteStrokes = _decodeStrokes(data['drawingData']);
+        final remoteStickyNotes = _decodeStickyNotes(data['stickyNotesData']);
+        final remoteSignature = _boardSignature(
+          notes: content,
+          strokes: remoteStrokes,
+          stickyNotes: remoteStickyNotes,
+        );
         if (!_ready) {
-          _ctrl.text = content;
+          _notesCtrl.text = content;
+          _strokes
+            ..clear()
+            ..addAll(remoteStrokes);
+          _stickyNotes
+            ..clear()
+            ..addAll(remoteStickyNotes);
           _ready = true;
-        } else if (_ctrl.text != content) {
-          _ctrl.text = content;
-          _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
+          _lastSavedSignature = remoteSignature;
+          _latestLocalSignature = remoteSignature;
+          _hasPendingLocalChanges = false;
+        } else if (
+            !_hasPendingLocalChanges &&
+            _activeStroke == null &&
+            _lastSavedSignature != remoteSignature) {
+          if (_notesCtrl.text != content) {
+            _notesCtrl.text = content;
+            _notesCtrl.selection = TextSelection.collapsed(
+              offset: _notesCtrl.text.length,
+            );
+          }
+          _strokes
+            ..clear()
+            ..addAll(remoteStrokes);
+          _stickyNotes
+            ..clear()
+            ..addAll(remoteStickyNotes);
+          _lastSavedSignature = remoteSignature;
+          _latestLocalSignature = remoteSignature;
         }
         return Scaffold(
           appBar: AppBar(
@@ -9580,53 +10166,556 @@ class _WhiteboardEditorScreenState extends State<WhiteboardEditorScreen> {
             ],
           ),
           body: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 18),
-            child: Container(
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF121217) : Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: isDark ? Colors.white12 : AppTheme.gray200,
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 14),
+            child: Column(
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    SegmentedButton<_WhiteboardTool>(
+                      segments: const [
+                        ButtonSegment<_WhiteboardTool>(
+                          value: _WhiteboardTool.draw,
+                          icon: Icon(Icons.edit_rounded),
+                          label: Text('Draw'),
+                        ),
+                        ButtonSegment<_WhiteboardTool>(
+                          value: _WhiteboardTool.eraser,
+                          icon: Icon(Icons.auto_fix_off_rounded),
+                          label: Text('Erase'),
+                        ),
+                        ButtonSegment<_WhiteboardTool>(
+                          value: _WhiteboardTool.pan,
+                          icon: Icon(Icons.pan_tool_alt_rounded),
+                          label: Text('Pan'),
+                        ),
+                      ],
+                      selected: {_tool},
+                      onSelectionChanged: (selection) {
+                        setState(() => _tool = selection.first);
+                      },
+                    ),
+                    IconButton(
+                      tooltip: 'Undo stroke',
+                      onPressed: _undoStroke,
+                      icon: const Icon(Icons.undo_rounded),
+                    ),
+                    IconButton(
+                      tooltip: 'Clear board',
+                      onPressed: _clearBoard,
+                      icon: const Icon(Icons.layers_clear_rounded),
+                    ),
+                    IconButton(
+                      tooltip: 'Add sticky note',
+                      onPressed: _addStickyNote,
+                      icon: const Icon(Icons.sticky_note_2_outlined),
+                    ),
+                    _colorSwatch(const Color(0xFF111111)),
+                    _colorSwatch(const Color(0xFF2563EB)),
+                    _colorSwatch(const Color(0xFFDC2626)),
+                    _colorSwatch(const Color(0xFF059669)),
+                  ],
                 ),
-              ),
-              child: TextField(
-                controller: _ctrl,
-                onChanged: (v) {
-                  _debounce?.cancel();
-                  _debounce = Timer(const Duration(milliseconds: 500), () {
-                    unawaited(_saveContent(v));
-                  });
-                },
-                expands: true,
-                maxLines: null,
-                minLines: null,
-                decoration: const InputDecoration(
-                  hintText: 'Start typing on this whiteboard...',
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.all(16),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(Icons.brush_rounded, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Slider(
+                        value: _selectedWidth,
+                        min: 1,
+                        max: 18,
+                        divisions: 17,
+                        label: '${_selectedWidth.toStringAsFixed(0)} px',
+                        onChanged: (v) => setState(() => _selectedWidth = v),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 56,
+                      child: Text(
+                        '${_selectedWidth.toStringAsFixed(0)}px',
+                        style: TextStyle(color: AppTheme.gray600, fontSize: 12),
+                      ),
+                    ),
+                  ],
                 ),
-                textAlignVertical: TextAlignVertical.top,
-              ),
+                const SizedBox(height: 10),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF121217) : Colors.white,
+                        border: Border.all(
+                          color: isDark ? Colors.white12 : AppTheme.gray200,
+                        ),
+                      ),
+                      child: InteractiveViewer(
+                        transformationController: _transformController,
+                        constrained: false,
+                        maxScale: 8,
+                        minScale: 0.4,
+                        panEnabled: _tool == _WhiteboardTool.pan,
+                        scaleEnabled: true,
+                        child: SizedBox(
+                          width: _canvasSize.width,
+                          height: _canvasSize.height,
+                          child: StreamBuilder<QuerySnapshot>(
+                            stream: FirebaseFirestore.instance
+                                .collection('whiteboards')
+                                .doc(widget.boardId)
+                                .collection('presence')
+                                .snapshots(),
+                            builder: (context, presenceSnapshot) {
+                              final presenceDocs = presenceSnapshot.data?.docs ?? const [];
+                              final now = DateTime.now();
+                              final collaborators = presenceDocs
+                                  .map(_WhiteboardPresence.fromDoc)
+                                  .where(
+                                    (p) =>
+                                        p.uid != _myUid &&
+                                        now.difference(p.updatedAt).inSeconds <= 20,
+                                  )
+                                  .toList();
+                              return Listener(
+                                onPointerMove: (e) => unawaited(
+                                  _syncPresence(e.localPosition),
+                                ),
+                                onPointerHover: (e) => unawaited(
+                                  _syncPresence(e.localPosition),
+                                ),
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onPanStart: _isDrawEnabled
+                                      ? (d) => _startStroke(d.localPosition)
+                                      : null,
+                                  onPanUpdate: _isDrawEnabled
+                                      ? (d) => _updateStroke(d.localPosition)
+                                      : null,
+                                  onPanEnd: _isDrawEnabled ? (_) => _endStroke() : null,
+                                  onPanCancel: _isDrawEnabled ? _endStroke : null,
+                                  child: Stack(
+                                    children: [
+                                      Positioned.fill(
+                                        child: CustomPaint(
+                                          painter: _WhiteboardCanvasPainter(
+                                            isDark: isDark,
+                                            strokes: _strokes,
+                                            activeStroke: _activeStroke,
+                                          ),
+                                        ),
+                                      ),
+                                      ..._stickyNotes.map(
+                                        (note) => Positioned(
+                                          left: note.x,
+                                          top: note.y,
+                                          child: GestureDetector(
+                                            onPanUpdate: (d) => _moveStickyNote(
+                                              note,
+                                              d.delta,
+                                            ),
+                                            onDoubleTap: () =>
+                                                unawaited(_editStickyNote(note)),
+                                            child: _StickyNoteCard(note: note),
+                                          ),
+                                        ),
+                                      ),
+                                      ...collaborators.map(
+                                        (c) => Positioned(
+                                          left: c.x,
+                                          top: c.y,
+                                          child: _CollaboratorCursor(presence: c),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _notesCtrl,
+                  maxLines: 2,
+                  minLines: 1,
+                  onChanged: (_) => _queueSave(),
+                  decoration: InputDecoration(
+                    hintText: 'Add notes for this board...',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    filled: true,
+                    fillColor: isDark ? const Color(0xFF121217) : Colors.white,
+                  ),
+                ),
+              ],
             ),
           ),
         );
       },
     );
   }
+
+  Widget _colorSwatch(Color color) {
+    final selected = _selectedColor.toARGB32() == color.toARGB32();
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedColor = color;
+          if (_tool == _WhiteboardTool.pan) {
+            _tool = _WhiteboardTool.draw;
+          }
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          border: Border.all(
+            width: selected ? 3 : 1.2,
+            color: selected ? AppTheme.primary500 : Colors.white70,
+          ),
+          boxShadow: const [
+            BoxShadow(
+              blurRadius: 3,
+              color: Colors.black26,
+              offset: Offset(0, 1),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
+
+class _WhiteboardStroke {
+  final int colorValue;
+  final double width;
+  final bool erase;
+  final List<Offset> points;
+
+  const _WhiteboardStroke({
+    required this.colorValue,
+    required this.width,
+    this.erase = false,
+    required this.points,
+  });
+
+  Map<String, dynamic> toMap() {
+    return {
+      'color': colorValue,
+      'width': width,
+      'erase': erase,
+      'points': points
+          .map((p) => {'x': p.dx, 'y': p.dy})
+          .toList(growable: false),
+    };
+  }
+
+  static _WhiteboardStroke? fromRaw(dynamic raw) {
+    if (raw is! Map) return null;
+    final colorVal = raw['color'];
+    final widthVal = raw['width'];
+    final eraseVal = raw['erase'];
+    final pointsRaw = raw['points'];
+    if (pointsRaw is! List) return null;
+    final points = <Offset>[];
+    for (final p in pointsRaw) {
+      if (p is! Map) continue;
+      final dx = (p['x'] as num?)?.toDouble();
+      final dy = (p['y'] as num?)?.toDouble();
+      if (dx == null || dy == null) continue;
+      points.add(Offset(dx, dy));
+    }
+    if (points.length < 2) return null;
+    final clampedWidth = (widthVal is num)
+        ? (widthVal.toDouble().clamp(1.0, 22.0) as num).toDouble()
+        : 3.0;
+    return _WhiteboardStroke(
+      colorValue: (colorVal is num)
+          ? colorVal.toInt()
+          : const Color(0xFF111111).toARGB32(),
+      width: clampedWidth,
+      erase: eraseVal == true,
+      points: points,
+    );
+  }
+}
+
+class _WhiteboardCanvasPainter extends CustomPainter {
+  final bool isDark;
+  final List<_WhiteboardStroke> strokes;
+  final _WhiteboardStroke? activeStroke;
+
+  const _WhiteboardCanvasPainter({
+    required this.isDark,
+    required this.strokes,
+    required this.activeStroke,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final bgPaint = Paint()..color = isDark ? const Color(0xFF111216) : Colors.white;
+    canvas.drawRect(Offset.zero & size, bgPaint);
+
+    final gridPaint = Paint()
+      ..color = isDark
+          ? Colors.white.withValues(alpha: 0.08)
+          : Colors.black.withValues(alpha: 0.06)
+      ..strokeWidth = 1;
+    const step = 28.0;
+    for (double x = 0; x <= size.width; x += step) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
+    }
+    for (double y = 0; y <= size.height; y += step) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
+    for (final stroke in strokes) {
+      _paintStroke(canvas, stroke);
+    }
+    if (activeStroke != null) {
+      _paintStroke(canvas, activeStroke!);
+    }
+  }
+
+  void _paintStroke(Canvas canvas, _WhiteboardStroke stroke) {
+    if (stroke.points.isEmpty) return;
+    final paint = Paint()
+      ..color = stroke.erase
+          ? (isDark ? const Color(0xFF111216) : Colors.white)
+          : Color(stroke.colorValue)
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke.width;
+    if (stroke.points.length == 1) {
+      canvas.drawCircle(stroke.points.first, stroke.width / 2, paint..style = PaintingStyle.fill);
+      return;
+    }
+    final path = Path()..moveTo(stroke.points.first.dx, stroke.points.first.dy);
+    for (final p in stroke.points.skip(1)) {
+      path.lineTo(p.dx, p.dy);
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _WhiteboardCanvasPainter oldDelegate) {
+    return oldDelegate.strokes != strokes ||
+        oldDelegate.activeStroke != activeStroke ||
+        oldDelegate.isDark != isDark;
+  }
+}
+
+class _WhiteboardStickyNote {
+  final String id;
+  final String text;
+  final double x;
+  final double y;
+  final int colorValue;
+
+  const _WhiteboardStickyNote({
+    required this.id,
+    required this.text,
+    required this.x,
+    required this.y,
+    required this.colorValue,
+  });
+
+  _WhiteboardStickyNote copyWith({
+    String? text,
+    double? x,
+    double? y,
+    int? colorValue,
+  }) {
+    return _WhiteboardStickyNote(
+      id: id,
+      text: text ?? this.text,
+      x: x ?? this.x,
+      y: y ?? this.y,
+      colorValue: colorValue ?? this.colorValue,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {'id': id, 'text': text, 'x': x, 'y': y, 'color': colorValue};
+  }
+
+  static _WhiteboardStickyNote? fromRaw(dynamic raw) {
+    if (raw is! Map) return null;
+    final id = (raw['id'] as String?) ?? '';
+    final text = (raw['text'] as String?) ?? 'Note';
+    final x = (raw['x'] as num?)?.toDouble();
+    final y = (raw['y'] as num?)?.toDouble();
+    final color = (raw['color'] as num?)?.toInt();
+    if (id.isEmpty || x == null || y == null) return null;
+    return _WhiteboardStickyNote(
+      id: id,
+      text: text,
+      x: x,
+      y: y,
+      colorValue: color ?? const Color(0xFFFDE68A).toARGB32(),
+    );
+  }
+}
+
+class _WhiteboardPresence {
+  final String uid;
+  final String label;
+  final double x;
+  final double y;
+  final int colorValue;
+  final DateTime updatedAt;
+
+  const _WhiteboardPresence({
+    required this.uid,
+    required this.label,
+    required this.x,
+    required this.y,
+    required this.colorValue,
+    required this.updatedAt,
+  });
+
+  static _WhiteboardPresence fromDoc(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>? ?? {};
+    return _WhiteboardPresence(
+      uid: (data['uid'] as String?) ?? doc.id,
+      label: (data['label'] as String?) ?? 'User',
+      x: ((data['x'] as num?) ?? 0).toDouble(),
+      y: ((data['y'] as num?) ?? 0).toDouble(),
+      colorValue: (data['color'] as num?)?.toInt() ?? const Color(0xFF2563EB).toARGB32(),
+      updatedAt: (data['updatedAt'] as Timestamp?)?.toDate() ??
+          DateTime.fromMillisecondsSinceEpoch(0),
+    );
+  }
+}
+
+class _StickyNoteCard extends StatelessWidget {
+  final _WhiteboardStickyNote note;
+  const _StickyNoteCard({required this.note});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 165,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Color(note.colorValue),
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 6,
+            offset: Offset(1, 2),
+          ),
+        ],
+      ),
+      child: Text(
+        note.text.trim().isEmpty ? 'Note' : note.text,
+        maxLines: 5,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          color: Color(0xFF3B2F00),
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+class _CollaboratorCursor extends StatelessWidget {
+  final _WhiteboardPresence presence;
+  const _CollaboratorCursor({required this.presence});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Color(presence.colorValue);
+    return IgnorePointer(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.navigation, color: color, size: 20),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              presence.label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _WhiteboardTool { draw, eraser, pan }
 
 class _ChatListScreenState extends State<ChatListScreen> {
   String _chatFilter = 'all';
 
-  bool _isUnreadThread(Map<String, dynamic> data) {
-    final t = (data['updatedAt'] as Timestamp?)?.toDate();
-    if (t == null) return false;
-    return DateTime.now().difference(t).inMinutes <= 30;
+  String _formatThreadTimestamp(DateTime? dt) {
+    if (dt == null) return '';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final d = DateTime(dt.year, dt.month, dt.day);
+    final diff = today.difference(d).inDays;
+    if (diff == 0) {
+      final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final m = dt.minute.toString().padLeft(2, '0');
+      final meridiem = dt.hour >= 12 ? 'PM' : 'AM';
+      return '$h:$m $meridiem';
+    }
+    if (diff == 1) return 'Yesterday';
+    if (diff < 7) {
+      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      return days[dt.weekday - 1];
+    }
+    return '${dt.day}/${dt.month}/${dt.year}';
   }
 
   String _dmThreadId(String a, String b) {
     final p = [a, b]..sort();
     return 'dm_${p[0]}_${p[1]}';
+  }
+
+  Future<void> _markDmOpened(String threadId) async {
+    final myUid = fa.FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (myUid.isEmpty || threadId.trim().isEmpty) return;
+    try {
+      await FirebaseFirestore.instance.collection('dmThreads').doc(threadId).set({
+        'openedAt': FieldValue.serverTimestamp(),
+        'openedBy': myUid,
+        'unreadCounts.$myUid': 0,
+      }, SetOptions(merge: true));
+    } on FirebaseException {
+      // Ignore if some legacy docs reject updates.
+    } catch (_) {}
+  }
+
+  DateTime? _threadSortTime(Map<String, dynamic> data) {
+    final opened = (data['openedAt'] as Timestamp?)?.toDate();
+    if (opened != null) return opened;
+    return (data['updatedAt'] as Timestamp?)?.toDate();
   }
 
   Future<void> _startDirectChat() async {
@@ -9668,6 +10757,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
         'participants': [my.uid, otherUid],
         'participantNames': {my.uid: meName, otherUid: otherName},
         'updatedAt': FieldValue.serverTimestamp(),
+        'openedAt': FieldValue.serverTimestamp(),
+        'openedBy': my.uid,
+        'unreadCounts.${my.uid}': 0,
         'lastMessage': '',
       }, SetOptions(merge: true));
     }
@@ -9894,12 +10986,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
                         ),
                       );
                     }
-                    // Sort client-side to avoid composite index requirements.
                     docs.sort((a, b) {
                       final ad = (a.data() as Map<String, dynamic>?) ?? {};
                       final bd = (b.data() as Map<String, dynamic>?) ?? {};
-                      final at = (ad['updatedAt'] as Timestamp?)?.toDate();
-                      final bt = (bd['updatedAt'] as Timestamp?)?.toDate();
+                      final at = _threadSortTime(ad);
+                      final bt = _threadSortTime(bd);
                       if (at == null && bt == null) return 0;
                       if (at == null) return 1;
                       if (bt == null) return -1;
@@ -9907,7 +10998,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
                     });
                     final filteredDocs = docs.where((d) {
                       final data = (d.data() as Map<String, dynamic>?) ?? {};
-                      if (_chatFilter == 'unread') return _isUnreadThread(data);
+                      if (_chatFilter == 'unread') {
+                        final t = (data['updatedAt'] as Timestamp?)?.toDate();
+                        if (t == null) return false;
+                        return DateTime.now().difference(t).inMinutes <= 30;
+                      }
                       return true;
                     }).toList();
                     if (filteredDocs.isEmpty) {
@@ -9939,6 +11034,12 @@ class _ChatListScreenState extends State<ChatListScreen> {
                             (names[otherUid] as String?) ?? 'User';
                         final lastMessage =
                             (data['lastMessage'] as String?) ?? '';
+                        final updatedAt = (data['updatedAt'] as Timestamp?)
+                            ?.toDate();
+                        final isUnread =
+                            updatedAt != null &&
+                            DateTime.now().difference(updatedAt).inMinutes <=
+                                30;
                         return Column(
                           children: [
                             ListTile(
@@ -9947,6 +11048,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                                 vertical: 4,
                               ),
                               onTap: () {
+                                unawaited(_markDmOpened(d.id));
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
@@ -9980,22 +11082,35 @@ class _ChatListScreenState extends State<ChatListScreen> {
                                   ),
                                 ),
                               ),
-                              title: Text(
-                                otherName,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                ),
+                              title: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      otherName,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  Text(
+                                    _formatThreadTimestamp(updatedAt),
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: AppTheme.gray600,
+                                    ),
+                                  ),
+                                ],
                               ),
                               subtitle: Text(
                                 lastMessage.isEmpty
                                     ? 'Tap to chat'
                                     : lastMessage,
                                 style: TextStyle(
-                                  color: _isUnreadThread(data)
+                                  color: isUnread
                                       ? Colors.black87
                                       : AppTheme.gray600,
                                   fontSize: 13,
-                                  fontWeight: _isUnreadThread(data)
+                                  fontWeight: isUnread
                                       ? FontWeight.w600
                                       : FontWeight.normal,
                                 ),
@@ -10026,11 +11141,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
       haptic: true,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
           color: selected
-              ? AppTheme.primary500.withValues(alpha: 0.12)
-              : Colors.white,
+              ? AppTheme.primary500.withValues(alpha: 0.14)
+              : AppTheme.gray100,
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
             color: selected
@@ -10230,18 +11345,145 @@ class ChatDetailScreen extends StatefulWidget {
 }
 
 class _ChatDetailScreenState extends State<ChatDetailScreen> {
+  bool _looksLikeImageAttachment({
+    required String mimeType,
+    required String fileName,
+    required String fileUrl,
+    required Map<String, dynamic> data,
+  }) {
+    if ((data['isImage'] as bool?) == true) return true;
+    final mime = mimeType.toLowerCase();
+    if (mime.startsWith('image/')) return true;
+    final fileExt = ((data['fileExt'] as String?) ?? '').trim().toLowerCase();
+    final candidates = <String>[fileExt];
+    final nameLower = fileName.toLowerCase();
+    final urlLower = fileUrl.toLowerCase();
+    if (nameLower.contains('.')) {
+      candidates.add(nameLower.split('.').last);
+    }
+    final urlPath = Uri.tryParse(fileUrl)?.path.toLowerCase() ?? '';
+    if (urlPath.contains('.')) {
+      candidates.add(urlPath.split('.').last);
+    } else if (urlLower.contains('.')) {
+      candidates.add(urlLower.split('.').last.split('?').first);
+    }
+    return candidates.any(
+      (ext) => [
+        'jpg',
+        'jpeg',
+        'png',
+        'gif',
+        'webp',
+        'bmp',
+        'heic',
+        'heif',
+      ].contains(ext),
+    );
+  }
+
   final _ctrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   final List<String> _recentEmojis = [];
 
-  /// Backward compatibility: older builds used a human-readable name as `chatId`.
-  /// - Groups: previously used group name
-  /// - DMs: could have used title
-  List<String> get _chatIdCandidates {
-    final ids = <String>{widget.chatId};
-    final legacy = widget.title.trim();
-    if (legacy.isNotEmpty) ids.add(legacy);
-    return ids.toList();
+  /// Security rules authorize chat access by canonical thread/group id only.
+  /// Querying by legacy title-based ids can trigger permission-denied on reads.
+  String get _canonicalChatId => widget.chatId.trim();
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_markDmAsOpened());
+  }
+
+  Future<void> _markDmAsOpened() async {
+    final myUid = fa.FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (widget.isGroup || !_canonicalChatId.startsWith('dm_') || myUid.isEmpty) {
+      return;
+    }
+    try {
+      await FirebaseFirestore.instance
+          .collection('dmThreads')
+          .doc(_canonicalChatId)
+          .set({
+            'openedAt': FieldValue.serverTimestamp(),
+            'openedBy': myUid,
+            'unreadCounts.$myUid': 0,
+          }, SetOptions(merge: true));
+    } on FirebaseException {
+      // Ignore if rules block updates on legacy thread docs.
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  String _formatMessageTime(DateTime? dt) {
+    if (dt == null) return '';
+    final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final m = dt.minute.toString().padLeft(2, '0');
+    final meridiem = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$h:$m $meridiem';
+  }
+
+  Future<void> _markIncomingSeen(List<QueryDocumentSnapshot> docs) async {
+    final myUid = fa.FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (myUid.isEmpty || docs.isEmpty) return;
+    final batch = FirebaseFirestore.instance.batch();
+    var hasChanges = false;
+    for (final doc in docs.take(40)) {
+      final data = doc.data() as Map<String, dynamic>? ?? {};
+      final senderUid = (data['senderUid'] as String?) ?? '';
+      if (senderUid == myUid || senderUid.isEmpty) continue;
+      final statusBy = ((data['statusBy'] as Map?) ?? const {}).map(
+        (k, v) => MapEntry(k.toString(), (v ?? '').toString()),
+      );
+      if (statusBy[myUid] == 'seen') continue;
+      statusBy[myUid] = 'seen';
+      batch.set(
+        FirebaseFirestore.instance.collection('messages').doc(doc.id),
+        {'statusBy': statusBy, 'updatedAt': FieldValue.serverTimestamp()},
+        SetOptions(merge: true),
+      );
+      hasChanges = true;
+    }
+    if (!hasChanges) return;
+    try {
+      await batch.commit();
+    } on FirebaseException {
+      // If rules block status writes, avoid noisy runtime exceptions.
+    } catch (_) {}
+  }
+
+  Future<void> _updateDmThreadPreview(String preview) async {
+    final myUid = fa.FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (widget.isGroup || !widget.chatId.startsWith('dm_') || myUid.isEmpty) {
+      return;
+    }
+    final threadRef = FirebaseFirestore.instance
+        .collection('dmThreads')
+        .doc(widget.chatId);
+    final snap = await threadRef.get();
+    final data = snap.data() ?? {};
+    final participants = ((data['participants'] as List?) ?? const [])
+        .whereType<String>()
+        .toList(growable: false);
+    final unreadCounts = ((data['unreadCounts'] as Map?) ?? const {}).map(
+      (k, v) => MapEntry(k.toString(), (v is num) ? v.toInt() : 0),
+    );
+    for (final uid in participants) {
+      if (uid == myUid) continue;
+      unreadCounts[uid] = (unreadCounts[uid] ?? 0) + 1;
+    }
+    unreadCounts[myUid] = 0;
+    await threadRef.set({
+      'updatedAt': FieldValue.serverTimestamp(),
+      'lastMessage': preview,
+      'unreadCounts': unreadCounts,
+    }, SetOptions(merge: true));
   }
 
   Future<void> _handleSend() async {
@@ -10262,17 +11504,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       'chatId': widget.chatId,
       'chatIdLegacy': widget.title,
       'chatType': widget.isGroup ? 'group' : 'dm',
+      'messageType': 'text',
+      'statusBy': {myUid: 'sent'},
     });
 
     // Update DM thread list metadata.
     if (!widget.isGroup && widget.chatId.startsWith('dm_')) {
-      await FirebaseFirestore.instance
-          .collection('dmThreads')
-          .doc(widget.chatId)
-          .set({
-            'updatedAt': FieldValue.serverTimestamp(),
-            'lastMessage': text,
-          }, SetOptions(merge: true));
+      await _updateDmThreadPreview(text);
     }
 
     _ctrl.clear();
@@ -10353,7 +11591,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
     for (final uploaded in result.uploadedEntries) {
       final f = uploaded.sourceFile;
-      final mimeType = lookupMimeType(f.name, headerBytes: f.bytes ?? const []);
       await FirebaseFirestore.instance.collection('messages').add({
         'text': f.name,
         'createdAt': FieldValue.serverTimestamp(),
@@ -10363,9 +11600,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         'chatIdLegacy': widget.title,
         'chatType': widget.isGroup ? 'group' : 'dm',
         'messageType': 'file',
-        'fileName': f.name,
+        'statusBy': {myUid: 'sent'},
+        'fileName': uploaded.fileName,
+        'fileExt': uploaded.fileExt,
         'fileSize': f.size,
-        'mimeType': mimeType,
+        'mimeType': uploaded.mimeType,
+        'isImage': uploaded.mimeType.toLowerCase().startsWith('image/'),
         'fileDocId': uploaded.fileDocId,
         'fileUrl': uploaded.downloadUrl,
       });
@@ -10375,13 +11615,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       final preview = result.uploadedEntries.length == 1
           ? '📎 ${result.uploadedEntries.first.sourceFile.name}'
           : '📎 ${result.uploadedEntries.length} files';
-      await FirebaseFirestore.instance
-          .collection('dmThreads')
-          .doc(widget.chatId)
-          .set({
-            'updatedAt': FieldValue.serverTimestamp(),
-            'lastMessage': preview,
-          }, SetOptions(merge: true));
+      await _updateDmThreadPreview(preview);
     }
 
     if (result.failedCount > 0 && mounted) {
@@ -10438,6 +11672,28 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       withData: true,
     );
     await _sendPickedFiles(res?.files ?? []);
+  }
+
+  Future<void> _pickVideo() async {
+    final picked = await ImagePicker().pickVideo(source: ImageSource.gallery);
+    if (picked == null) return;
+    final bytes = await picked.readAsBytes();
+    final name = picked.name.trim().isEmpty
+        ? 'video_${DateTime.now().millisecondsSinceEpoch}.mp4'
+        : picked.name.trim();
+    await _sendPickedFiles([
+      PlatformFile(name: name, size: bytes.length, bytes: bytes),
+    ]);
+  }
+
+  Future<void> _pickVoiceNote() async {
+    final res = await FilePicker.platform.pickFiles(
+      allowMultiple: false,
+      withData: true,
+      type: FileType.audio,
+    );
+    final files = res?.files ?? const <PlatformFile>[];
+    await _sendPickedFiles(files);
   }
 
   void _showAttachmentOptions() {
@@ -10525,6 +11781,48 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                       await _pickFromCamera();
                     },
                   ),
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 4,
+                  ),
+                  leading: CircleAvatar(
+                    backgroundColor: cs.tertiaryContainer,
+                    foregroundColor: cs.onTertiaryContainer,
+                    child: const Icon(Icons.videocam_rounded),
+                  ),
+                  title: const Text('Video'),
+                  subtitle: Text(
+                    'Share a video clip',
+                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+                  ),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    if (!mounted) return;
+                    await _pickVideo();
+                  },
+                ),
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 4,
+                  ),
+                  leading: CircleAvatar(
+                    backgroundColor: cs.primaryContainer,
+                    foregroundColor: cs.onPrimaryContainer,
+                    child: const Icon(Icons.mic_rounded),
+                  ),
+                  title: const Text('Voice note'),
+                  subtitle: Text(
+                    'Attach an audio file',
+                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+                  ),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    if (!mounted) return;
+                    await _pickVoiceNote();
+                  },
+                ),
                 ListTile(
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 20,
@@ -10657,8 +11955,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
                   .collection('messages')
-                  .where('chatId', whereIn: _chatIdCandidates.take(10).toList())
+                  .where('chatId', isEqualTo: _canonicalChatId)
                   .orderBy('createdAt', descending: true)
+                  .limit(100)
                   .snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.hasError)
@@ -10682,6 +11981,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                       style: TextStyle(color: AppTheme.gray400),
                     ),
                   );
+                unawaited(_markIncomingSeen(docs));
                 return ListView.builder(
                   controller: _scrollCtrl,
                   reverse: true,
@@ -10808,7 +12108,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           .collection('messages')
           .doc(messageId);
       final snap = await tx.get(ref);
-      final data = (snap.data() as Map<String, dynamic>?) ?? {};
+      final data = snap.data() ?? {};
       final existingRaw = data['reactionCounts'];
       final existing = <String, int>{};
       if (existingRaw is Map) {
@@ -10824,6 +12124,109 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     });
+  }
+
+  Future<void> _forwardMessageToUser(Map<String, dynamic> data) async {
+    final my = fa.FirebaseAuth.instance.currentUser;
+    if (my == null) return;
+    final picked = await showModalBottomSheet<TaskMateUser>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _UserPickerSheet(currentUid: my.uid),
+    );
+    if (picked == null) return;
+    final otherUid = picked.uid.trim();
+    if (otherUid.isEmpty || otherUid == my.uid) return;
+    final participants = [my.uid, otherUid]..sort();
+    final threadId = 'dm_${participants[0]}_${participants[1]}';
+    final meName = widget.appState?.user.displayName.trim().isNotEmpty ?? false
+        ? widget.appState!.user.displayName.trim()
+        : (my.email ?? 'Me');
+    await FirebaseFirestore.instance.collection('dmThreads').doc(threadId).set({
+      'id': threadId,
+      'participants': [my.uid, otherUid],
+      'participantNames': {my.uid: meName, otherUid: picked.bestLabel},
+      'updatedAt': FieldValue.serverTimestamp(),
+      'lastMessage': (data['text'] as String?) ?? '',
+    }, SetOptions(merge: true));
+    await FirebaseFirestore.instance.collection('messages').add({
+      ...data,
+      'chatId': threadId,
+      'chatType': 'dm',
+      'senderUid': my.uid,
+      'senderName': meName,
+      'createdAt': FieldValue.serverTimestamp(),
+      'statusBy': {my.uid: 'sent'},
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Message forwarded'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _openMessageActions(
+    String messageId,
+    Map<String, dynamic> data,
+    bool isMe,
+  ) async {
+    final selection = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.add_reaction_outlined),
+              title: const Text('React'),
+              onTap: () => Navigator.pop(ctx, 'react'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.copy_all_rounded),
+              title: const Text('Copy'),
+              onTap: () => Navigator.pop(ctx, 'copy'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.forward_rounded),
+              title: const Text('Forward'),
+              onTap: () => Navigator.pop(ctx, 'forward'),
+            ),
+            if (isMe)
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded),
+                title: const Text('Delete'),
+                onTap: () => Navigator.pop(ctx, 'delete'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selection == null) return;
+    switch (selection) {
+      case 'react':
+        await _openReactionPicker(messageId, const Offset(160, 120));
+        break;
+      case 'copy':
+        final text = ((data['text'] as String?) ?? '').trim();
+        if (text.isNotEmpty) {
+          await Clipboard.setData(ClipboardData(text: text));
+        }
+        break;
+      case 'forward':
+        await _forwardMessageToUser(data);
+        break;
+      case 'delete':
+        await FirebaseFirestore.instance
+            .collection('messages')
+            .doc(messageId)
+            .delete();
+        break;
+    }
   }
 
   void _rememberRecentEmoji(String emoji) {
@@ -11030,12 +12433,18 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     final messageType = ((data['messageType'] as String?) ?? '')
         .trim()
         .toLowerCase();
+    final ts = (data['createdAt'] as Timestamp?)?.toDate();
     if (messageType == 'file') {
       final fileName = ((data['fileName'] as String?) ?? text).trim();
       final fileUrl = ((data['fileUrl'] as String?) ?? '').trim();
       final mime = ((data['mimeType'] as String?) ?? '').trim().toLowerCase();
       final size = (data['fileSize'] as int?) ?? 0;
-      final isImage = mime.startsWith('image/');
+      final isImage = _looksLikeImageAttachment(
+        mimeType: mime,
+        fileName: fileName,
+        fileUrl: fileUrl,
+        data: data,
+      );
       final cs = Theme.of(context).colorScheme;
       final isDark = Theme.of(context).brightness == Brightness.dark;
       final accent = widget.appState?.chatAccentColor ?? cs.primary;
@@ -11044,23 +12453,22 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           : (isDark ? const Color(0xFF2A2A2A) : AppTheme.gray100);
 
       return GestureDetector(
-        onLongPressStart: (d) =>
-            _openReactionPicker(messageId, d.globalPosition),
+        onLongPress: () => _openMessageActions(messageId, data, isMe),
         child: Align(
           alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
           child: Container(
-            margin: const EdgeInsets.symmetric(vertical: 4),
-            padding: const EdgeInsets.all(10),
+            margin: const EdgeInsets.symmetric(vertical: 1.5),
+            padding: const EdgeInsets.all(8),
             constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.72,
+              maxWidth: MediaQuery.of(context).size.width * 0.68,
             ),
             decoration: BoxDecoration(
               color: bubbleColor,
               borderRadius: BorderRadius.only(
-                topLeft: const Radius.circular(18),
-                topRight: const Radius.circular(18),
-                bottomLeft: Radius.circular(isMe ? 18 : 4),
-                bottomRight: Radius.circular(isMe ? 4 : 18),
+                topLeft: const Radius.circular(16),
+                topRight: const Radius.circular(16),
+                bottomLeft: Radius.circular(isMe ? 16 : 4),
+                bottomRight: Radius.circular(isMe ? 4 : 16),
               ),
             ),
             child: Column(
@@ -11079,12 +12487,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                       borderRadius: BorderRadius.circular(12),
                       child: Image.network(
                         fileUrl,
-                        width: 220,
-                        height: 160,
+                        width: 180,
+                        height: 130,
                         fit: BoxFit.cover,
                         errorBuilder: (_, _, _) => Container(
-                          width: 220,
-                          height: 110,
+                          width: 180,
+                          height: 100,
                           color: Colors.black12,
                           alignment: Alignment.center,
                           child: const Icon(Icons.broken_image_outlined),
@@ -11126,7 +12534,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 const SizedBox(height: 6),
                 Text(
                   size > 0 ? _prettyBytes(size) : 'Attachment',
-                  style: TextStyle(color: AppTheme.gray600, fontSize: 12),
+                  style: TextStyle(color: AppTheme.gray600, fontSize: 11),
+                ),
+                const SizedBox(height: 3),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _formatMessageTime(ts),
+                      style: const TextStyle(
+                        color: AppTheme.gray600,
+                        fontSize: 9,
+                      ),
+                    ),
+                  ],
                 ),
                 _reactionRow(data),
               ],
@@ -11148,24 +12570,24 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final accent = widget.appState?.chatAccentColor ?? cs.primary;
     return GestureDetector(
-      onLongPressStart: (d) => _openReactionPicker(messageId, d.globalPosition),
+      onLongPress: () => _openMessageActions(messageId, data, isMe),
       child: Align(
         alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
         child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          margin: const EdgeInsets.symmetric(vertical: 1.5),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
           constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.72,
+            maxWidth: MediaQuery.of(context).size.width * 0.68,
           ),
           decoration: BoxDecoration(
             color: isMe
                 ? accent
                 : (isDark ? const Color(0xFF2A2A2A) : AppTheme.gray100),
             borderRadius: BorderRadius.only(
-              topLeft: const Radius.circular(18),
-              topRight: const Radius.circular(18),
-              bottomLeft: Radius.circular(isMe ? 18 : 4),
-              bottomRight: Radius.circular(isMe ? 4 : 18),
+              topLeft: const Radius.circular(16),
+              topRight: const Radius.circular(16),
+              bottomLeft: Radius.circular(isMe ? 16 : 4),
+              bottomRight: Radius.circular(isMe ? 4 : 16),
             ),
           ),
           child: Column(
@@ -11175,8 +12597,24 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 text,
                 style: TextStyle(
                   color: isMe ? Colors.white : null,
-                  fontSize: 15,
+                  fontSize: 13,
                 ),
+              ),
+              const SizedBox(height: 2),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _formatMessageTime(
+                      (data['createdAt'] as Timestamp?)?.toDate(),
+                    ),
+                    style: TextStyle(
+                      color: isMe ? Colors.white70 : AppTheme.gray600,
+                      fontSize: 9,
+                    ),
+                  ),
+                ],
               ),
               _reactionRow(data),
             ],
@@ -11209,10 +12647,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                   if (isImage) {
                     _openImagePreview(fileName: fileName, fileUrl: fileUrl);
                   } else {
-                    await launchUrl(
-                      Uri.parse(fileUrl),
-                      mode: LaunchMode.externalApplication,
+                    final uri = Uri.parse(fileUrl);
+                    final ok = await launchUrl(
+                      uri,
+                      mode: LaunchMode.platformDefault,
                     );
+                    if (!ok && mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Could not open this file on your device.',
+                          ),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
                   }
                 },
               ),
@@ -11221,10 +12670,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 title: const Text('Download / Open externally'),
                 onTap: () async {
                   Navigator.pop(ctx);
-                  await launchUrl(
-                    Uri.parse(fileUrl),
-                    mode: LaunchMode.externalApplication,
+                  final uri = Uri.parse(fileUrl);
+                  final ok = await launchUrl(
+                    uri,
+                    mode: LaunchMode.platformDefault,
                   );
+                  if (!ok && mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Could not open the download link on this device.',
+                        ),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
                 },
               ),
               ListTile(
@@ -11262,10 +12722,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               IconButton(
                 icon: const Icon(Icons.download_rounded),
                 onPressed: () async {
-                  await launchUrl(
-                    Uri.parse(fileUrl),
-                    mode: LaunchMode.externalApplication,
+                  final uri = Uri.parse(fileUrl);
+                  final ok = await launchUrl(
+                    uri,
+                    mode: LaunchMode.platformDefault,
                   );
+                  if (!ok && mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Could not open this image externally on your device.',
+                        ),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
                 },
               ),
             ],

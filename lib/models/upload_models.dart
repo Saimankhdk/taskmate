@@ -7,6 +7,8 @@ class UploadedFileEntry {
   final String downloadUrl;
   final String fileName;
   final int fileSize;
+  final String mimeType;
+  final String fileExt;
 
   UploadedFileEntry({
     required this.sourceFile,
@@ -15,6 +17,8 @@ class UploadedFileEntry {
     required this.downloadUrl,
     required this.fileName,
     required this.fileSize,
+    required this.mimeType,
+    required this.fileExt,
   });
 }
 

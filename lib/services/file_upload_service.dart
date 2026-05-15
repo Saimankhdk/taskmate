@@ -16,11 +16,8 @@ class FileUploadService {
   final FirebaseStorage? storage;
   final Random _rng;
 
-  FileUploadService({
-    this.firestore,
-    this.storage,
-    Random? random,
-  }) : _rng = random ?? Random();
+  FileUploadService({this.firestore, this.storage, Random? random})
+    : _rng = random ?? Random();
 
   Future<UploadBatchResult> uploadFiles({
     required List<PlatformFile> files,
@@ -108,7 +105,11 @@ class FileUploadService {
         ? safeName.split('.').last.toLowerCase()
         : '';
     final category = _autoCategoryFromExt(ext);
+    final byteSniffMime = source is _BytesUploadSource
+        ? lookupMimeType('', headerBytes: source.bytes)
+        : null;
     final mimeType =
+        byteSniffMime ??
         lookupMimeType(safeName, headerBytes: file.bytes ?? const <int>[]) ??
         'application/octet-stream';
     final storagePath = [
@@ -183,6 +184,8 @@ class FileUploadService {
         downloadUrl: url,
         fileName: safeName,
         fileSize: file.size,
+        mimeType: mimeType,
+        fileExt: ext,
       );
     } on FirebaseException catch (e) {
       // Keep Storage and Firestore consistent if metadata write fails.

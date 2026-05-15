@@ -13,7 +13,7 @@ service firebase.storage {
     // Files are stored under uploads/{ownerUid}/...
     match /uploads/{ownerUid}/{allPaths=**} {
       allow write: if signedIn() && ownerUid == uid();
-      allow read: if signedIn() && ownerUid == uid();
+      allow read: if signedIn();
     }
   }
 }
